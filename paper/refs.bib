@@ -1,0 +1,343 @@
+@inproceedings{merkle1980,
+  author    = {Merkle, Ralph C.},
+  title     = {Protocols for Public Key Cryptosystems},
+  booktitle = {Proceedings of the 1980 IEEE Symposium on Security and Privacy},
+  year      = {1980},
+  pages     = {122--134},
+  publisher = {IEEE},
+  note      = {Introduces the Merkle tree / hash tree construction.}
+}
+
+@misc{bip341,
+  author = {Wuille, Pieter and Nick, Jonas and Towns, Anthony},
+  title  = {{BIP} 341: {Taproot}: {SegWit} version 1 spending rules},
+  year   = {2020},
+  howpublished = {\url{https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki}},
+  note   = {Defines the annex field and its sha\_annex commitment.}
+}
+
+@article{maniatis2003,
+  author  = {Maniatis, Petros and Baker, Mary},
+  title   = {Authenticated Append-only Skip Lists},
+  journal = {arXiv preprint arXiv:cs/0302010},
+  year    = {2003}
+}
+
+@inproceedings{goodrich2001,
+  author    = {Goodrich, Michael T. and Tamassia, Roberto and Schwerin, Andrew},
+  title     = {Implementation of an Authenticated Dictionary with Skip Lists and Commutative Hashing},
+  booktitle = {Proceedings DARPA Information Survivability Conference and Exposition II (DISCEX '01)},
+  year      = {2001},
+  volume    = {2},
+  pages     = {68--82},
+  publisher = {IEEE}
+}
+
+@inproceedings{crosby2009,
+  author    = {Crosby, Scott A. and Wallach, Dan S.},
+  title     = {Efficient Data Structures for Tamper-Evident Logging},
+  booktitle = {Proceedings of the 18th USENIX Security Symposium},
+  year      = {2009}
+}
+
+@misc{pugh1990,
+  author = {Pugh, William},
+  title  = {Skip Lists: A Probabilistic Alternative to Balanced Trees},
+  year   = {1990},
+  note   = {Communications of the ACM, 33(6), 668--676}
+}
+
+@misc{dobbertin1996,
+  author = {Dobbertin, Hans},
+  title  = {Cryptanalysis of {MD5} Compress},
+  year   = {1996},
+  note   = {Announced at the rump session of Eurocrypt '96; exhibits free-start
+  collisions for the MD5 compression function years before any collision was
+  known for MD5 itself.}
+}
+
+@misc{stevens2015shappening,
+  author = {Stevens, Marc and Karpman, Pierre and Peyrin, Thomas},
+  title  = {Freestart Collision for Full {SHA-1}},
+  year   = {2015},
+  howpublished = {IACR Cryptology ePrint Archive, Report 2015/967 (``The
+  SHAppening'')},
+  note   = {Exhibits a free-start collision for the full SHA-1 compression
+  function in 2015, two years before the first ordinary SHA-1 collision
+  (SHAttered, 2017).}
+}
+
+@inproceedings{kalodner2018arbitrum,
+  author    = {Kalodner, Harry and Goldfeder, Steven and Chen, Xiaoqi and Weinberg, S. Matthew and Felten, Edward W.},
+  title     = {Arbitrum: Scalable, Private Smart Contracts},
+  booktitle = {27th USENIX Security Symposium},
+  year      = {2018}
+}
+
+@misc{rfc6962,
+  author       = {Laurie, Ben and Langley, Adam and Kasper, Emilia},
+  title        = {Certificate Transparency},
+  howpublished = {RFC 6962, IETF},
+  year         = {2013},
+  note         = {Defines the Merkle tree convention (distinct leaf/internal
+  hash prefixes, leftmost-complete-subtree handling of non-power-of-two leaf
+  counts) referenced in Section~11.}
+}
+
+@misc{todd2016mmr,
+  author       = {Todd, Peter},
+  title        = {Merkle Mountain Ranges},
+  year         = {2016},
+  howpublished = {OpenTimestamps project documentation / mailing-list
+  writeup; no formal peer-reviewed publication},
+  note         = {Generalizes Merkle trees to an efficiently-appendable
+  forest of perfect binary trees.}
+}
+
+@inproceedings{mahmoody2013sequential,
+  author    = {Mahmoody, Mohammad and Moran, Tal and Vadhan, Salil},
+  title     = {Publicly Verifiable Proofs of Sequential Work},
+  booktitle = {Proceedings of the 4th Conference on Innovations in Theoretical Computer Science (ITCS)},
+  year      = {2013}
+}
+
+@misc{lerner2024bitvmx,
+  author       = {Lerner, Sergio Demian and Amela, Ramon and Mishra, Shreemoy and Jonas, Martin and {\'A}lvarez Cid-Fuentes, Javier},
+  title        = {{BitVMX}: A {CPU} for Universal Computation on {Bitcoin}},
+  year         = {2024},
+  howpublished = {arXiv:2405.06842},
+  note         = {\url{https://arxiv.org/abs/2405.06842}}
+}
+
+@misc{lerner2025esspi,
+  author       = {Lerner, Sergio Demian and Jonas, Martin and Futoransky, Ariel},
+  title        = {{ESSPI}: {ECDSA}/{Schnorr} Signed Program Input for {BitVMX}},
+  year         = {2025},
+  howpublished = {arXiv:2503.02772},
+  note         = {\url{https://arxiv.org/abs/2503.02772}}
+}
+
+@misc{eip2028,
+  author       = {Akhunov, Alexey and Ben Sasson, Eli and Brand, Tom and Guthmann, Louis and Levy, Avihu},
+  title        = {{EIP}-2028: Transaction Data Gas Cost Reduction},
+  year         = {2019},
+  howpublished = {Ethereum Improvement Proposals, no. 2028},
+  note         = {\url{https://eips.ethereum.org/EIPS/eip-2028}. Reduces
+  the calldata cost of a non-zero byte from 68 to 16 gas; unchanged since.}
+}
+
+@misc{eip4844,
+  author       = {Buterin, Vitalik and Feist, Dankrad and Loerakker, Diederik and Kadianakis, George and Garnett, Matt and Taiwo, Mofi and Dietrichs, Ansgar},
+  title        = {{EIP}-4844: Shard Blob Transactions},
+  year         = {2022},
+  howpublished = {Ethereum Improvement Proposals, no. 4844},
+  note         = {\url{https://eips.ethereum.org/EIPS/eip-4844}. Live since
+  the Dencun upgrade (March 2024); defines blob transactions and their
+  $\sim$18-day (4096-epoch) data retention window.}
+}
+
+@misc{eip7623,
+  author       = {Wahrst{\"a}tter, Toni and Buterin, Vitalik},
+  title        = {{EIP}-7623: Increase Calldata Cost},
+  year         = {2024},
+  howpublished = {Ethereum Improvement Proposals, no. 7623},
+  note         = {\url{https://eips.ethereum.org/EIPS/eip-7623}. Live since
+  the Pectra upgrade (May 2025); introduces the 40-gas/byte calldata floor
+  for data-heavy, low-execution transactions used in
+  Section~\ref{sec:rollup-eth}.}
+}
+
+@misc{eip2929,
+  author       = {Buterin, Vitalik and Swende, Martin},
+  title        = {{EIP}-2929: Gas Cost Increases for State Access Opcodes},
+  year         = {2020},
+  howpublished = {Ethereum Improvement Proposals, no. 2929},
+  note         = {\url{https://eips.ethereum.org/EIPS/eip-2929}. Live since
+  the Berlin upgrade (April 2021); introduces the cold/warm access-cost
+  distinction used for \texttt{SSTORE} and precompile calls in
+  Section~\ref{sec:rollup-eth}.}
+}
+
+@misc{eip2200,
+  author       = {Tang, Wei},
+  title        = {{EIP}-2200: Structured Definitions for Net Gas Metering},
+  year         = {2019},
+  howpublished = {Ethereum Improvement Proposals, no. 2200},
+  note         = {\url{https://eips.ethereum.org/EIPS/eip-2200}. Source of
+  \texttt{SSTORE\_SET\_GAS}$=20000$, unchanged by later repricings.}
+}
+
+@misc{eip152,
+  author       = {Hess, Tjaden and Luongo, Matt and Dyraga, Piotr and Hancock, James},
+  title        = {{EIP}-152: Add {BLAKE2} Compression Function \texttt{F} Precompile},
+  year         = {2016},
+  howpublished = {Ethereum Improvement Proposals, no. 152},
+  note         = {\url{https://eips.ethereum.org/EIPS/eip-152}. Live since
+  the Istanbul upgrade (December 2019); 1 gas per round, 12 rounds for
+  standard BLAKE2b.}
+}
+
+@misc{rsk2022,
+  author       = {Lerner, Sergio Demian and {\'A}lvarez Cid-Fuentes, Javier and Len, Julian and Fern{\`a}ndez-Val{\`e}ncia, Rams{\`e}s and Gallardo, Patricio and Vescovo, Nicol{\'a}s and Laprida, Ra{\'u}l and Mishra, Shreemoy and Jinich, Federico and Masini, Diego},
+  title        = {{RSK}: A {Bitcoin} Sidechain with Stateful Smart-Contract Functionality},
+  year         = {2022},
+  howpublished = {Cryptology ePrint Archive, Paper 2022/684},
+  note         = {\url{https://eprint.iacr.org/2022/684}}
+}
+
+@misc{rskip400,
+  author       = {{Rootstock Improvement Proposals}},
+  title        = {{RSKIP400}: Calldata Gas Cost Reduction},
+  year         = {2023},
+  howpublished = {Status: Adopted},
+  note         = {\url{https://ips.rootstock.io/IPs/RSKIP400.html}.
+  Implements EIP-2028's 16-gas/non-zero-byte calldata pricing on Rootstock.}
+}
+
+@misc{rskip153,
+  author       = {{Rootstock Improvement Proposals}},
+  title        = {{RSKIP153}: Add {BLAKE2} Compression Function \texttt{F} Precompile},
+  year         = {2020},
+  howpublished = {Status: Adopted},
+  note         = {\url{https://ips.rootstock.io/IPs/RSKIP153.html}. Adds
+  the EIP-152-compatible BLAKE2F precompile (same 1-gas-per-round pricing)
+  to Rootstock, active since the Iris hardfork.}
+}
+
+@misc{rskip239,
+  author       = {{Rootstock Improvement Proposals}},
+  title        = {{RSKIP239}: Reprice Trie Read Opcodes},
+  year         = {2021},
+  howpublished = {Status: Draft (unadopted)},
+  note         = {\url{https://ips.rootstock.io/IPs/RSKIP239.html}.
+  Authored by S. D. Lerner and S. Mishra; its ``current cost'' column and
+  rationale document Rootstock's live, pre-EIP-2929 gas schedule (as of
+  writing, and since the proposal itself remains unadopted, presumably
+  still), stating directly that matching Ethereum's post-Berlin schedule
+  is not Rootstock's goal.}
+}
+
+@misc{rskjgascost,
+  author       = {{RSK Labs / RootstockLabs}},
+  title        = {\texttt{GasCost.java}, {RSKj} Reference Client},
+  year         = {2026},
+  howpublished = {Source file, \texttt{rsksmart/rskj}},
+  note         = {\url{https://github.com/rsksmart/rskj/blob/master/rskj-core/src/main/java/org/ethereum/vm/GasCost.java}.
+  Authoritative current opcode/precompile gas constants: \texttt{CALL=700},
+  \texttt{SET\_SSTORE=20000}, \texttt{SLOAD=200}, \texttt{SHA3=30}/\texttt{SHA3\_WORD=6},
+  \texttt{SHA256=60}/\texttt{SHA256\_WORD=12}, no cold/warm access-cost
+  constants defined -- consistent with RSKIP239's account.}
+}
+
+@misc{rskgas,
+  author       = {{Rootstock Developers Portal}},
+  title        = {{rBTC} Gas Fees: Optimizing Transaction Costs},
+  year         = {2026},
+  howpublished = {Web page, last updated June 2026},
+  note         = {\url{https://dev.rootstock.io/concepts/rbtc/gas/}.
+  States the current transaction gas limit per block is 6{,}800{,}000
+  units.}
+}
+
+@misc{arbos40,
+  author       = {{Offchain Labs}},
+  title        = {{ArbOS 40 Callisto}},
+  year         = {2025},
+  howpublished = {Arbitrum Docs, ArbOS release notes},
+  note         = {\url{https://docs.arbitrum.io/run-arbitrum-node/arbos-releases/arbos40}.
+  Activated 2025 (Arbitrum's Pectra-alignment upgrade); states EIP-7623 is
+  intentionally not enabled on Arbitrum chains, ``because block size
+  variance is less of a concern on Arbitrum chains.''}
+}
+
+@misc{arbos51,
+  author       = {{Offchain Labs}},
+  title        = {{ArbOS 51 Dia}},
+  year         = {2026},
+  howpublished = {Arbitrum Docs, ArbOS release notes},
+  note         = {\url{https://docs.arbitrum.io/run-arbitrum-node/arbos-releases/arbos51}.
+  Activated January 8, 2026; confirms EIP-7623 remains unenabled on
+  Arbitrum One/Nova, introduces \texttt{gasFloorPerToken} only for
+  Arbitrum chains posting to an EIP-7623-enabled parent chain, and sets a
+  32{,}000{,}000 child-chain-execution-gas per-transaction cap.}
+}
+
+@misc{linuswoll2026bitvm3,
+  author       = {Linus Woll, Robin and Alexopoulos, Ioannis and Aumayr, Lukas and Avarikioti, Zeta and Maffei, Matteo and Tse, David},
+  title        = {{BitVM3}: Efficient {Bitcoin} Bridges via Garbled Circuits},
+  year         = {2026},
+  howpublished = {Cryptology ePrint Archive, Paper 2026/933},
+  note         = {\url{https://eprint.iacr.org/2026/933}. Supersedes an
+  earlier RSA-based BitVM3 construction retracted after a security break
+  (documented separately in ePrint 2025/1291); this citation refers to the
+  current garbled-circuit-based version.}
+}
+
+@inproceedings{buldas1998,
+  author    = {Buldas, Ahto and Laud, Peeter and Lipmaa, Helger and Villemson, Jan},
+  title     = {Time-Stamping with Binary Linking Schemes},
+  booktitle = {Advances in Cryptology -- CRYPTO '98},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1462},
+  pages     = {486--501},
+  publisher = {Springer},
+  year      = {1998},
+  doi       = {10.1007/BFb0055749}
+}
+
+@inproceedings{buldas2000,
+  author    = {Buldas, Ahto and Lipmaa, Helger and Schoenmakers, Berry},
+  title     = {Optimally Efficient Accountable Time-Stamping},
+  booktitle = {Public Key Cryptography -- PKC 2000},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {1751},
+  pages     = {293--305},
+  publisher = {Springer},
+  year      = {2000},
+  doi       = {10.1007/978-3-540-46588-1_20}
+}
+
+@article{haber1991,
+  author  = {Haber, Stuart and Stornetta, W. Scott},
+  title   = {How to Time-Stamp a Digital Document},
+  journal = {Journal of Cryptology},
+  volume  = {3},
+  number  = {2},
+  pages   = {99--111},
+  year    = {1991}
+}
+
+@misc{li2024sha2,
+  author       = {Li, Yingxin and Liu, Fukang and Wang, Gaoli},
+  title        = {New Records in Collision Attacks on {SHA-2}},
+  howpublished = {Cryptology ePrint Archive, Paper 2024/349},
+  year         = {2024},
+  note         = {First practical semi-free-start collision for 39-step SHA-256 (of 64)},
+  url          = {https://eprint.iacr.org/2024/349}
+}
+
+@misc{guo2013blake2,
+  author       = {Guo, Jian and Karpman, Pierre and Nikoli{\'c}, Ivica and Wang, Lei and Wu, Shuang},
+  title        = {Analysis of {BLAKE2}},
+  howpublished = {Cryptology ePrint Archive, Paper 2013/467 (CT-RSA 2014)},
+  year         = {2013},
+  url          = {https://eprint.iacr.org/2013/467}
+}
+
+@misc{eip7825,
+  author       = {Giulio Rebuffo and Toni Wahrst{\"a}tter},
+  title        = {{EIP-7825}: Transaction Gas Limit Cap},
+  year         = {2024},
+  howpublished = {Ethereum Improvement Proposals},
+  note         = {Caps each transaction at $2^{24}$ gas; activated on mainnet with Fusaka, 3 December 2025},
+  url          = {https://eips.ethereum.org/EIPS/eip-7825}
+}
+
+@misc{eip8007,
+  author       = {Maria Silva and Ansgar Dietrichs},
+  title        = {{EIP-8007}: Glamsterdam Gas Repricings},
+  howpublished = {Ethereum Improvement Proposals, Draft (Meta)},
+  year         = {2025},
+  note         = {Directory of Glamsterdam repricing EIPs, incl.\ EIP-7976 (calldata floor 10/40 $\to$ 64/64 gas per byte), EIP-8037 (state-creation gas), EIP-7904 (no compute/precompile repricing). Numbers marked preliminary. Accessed October 2026.},
+  url          = {https://eips.ethereum.org/EIPS/eip-8007}
+}

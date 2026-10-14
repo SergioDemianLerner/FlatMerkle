@@ -1,0 +1,129 @@
+\section{Optimal element size}
+\label{sec:optimal-size}
+
+\subsection{A flexible toy primitive}
+
+Fix a total payload size $P$ bytes and a state width $W$ bytes, and suppose
+the element size $D$ can be freely chosen (i.e.\ the compression function's
+block width can be made to match $D$ exactly, as in our toy 32-byte
+primitive, Section~\ref{sec:examples}). $D$ is not a free real number,
+however: $\mathrm{MID}(a)$ re-injects the entire $W$-byte checkpoint into
+one $D$-byte block via an injective encoding
+(Definition~\ref{def:padb}), and no injective encoding can embed a wider
+value into a narrower one, so
+\begin{equation}
+D \ge W
+\end{equation}
+is a hard feasibility floor, not a property of any particular padding
+scheme -- it holds regardless of whether the encoding used has a spare
+terminator byte (the $b>w$ scheme) or none (the $b=w$ identity encoding).
+The construction also requires $N = 2^L$ for an integer $L$
+(Section~\ref{sec:construction}; non-power-of-two $N$ is not yet handled --
+Section~\ref{sec:non-power-of-two}), so the genuine free variable is the
+integer $L$, with $D = P/2^L$ determined by it, not $D$ itself. The problem
+is therefore the constrained optimization
+\begin{equation}
+\min_{L \in \mathbb{Z}}\ \mathrm{size}(L) = 2D + (L-1)W = \frac{2P}{2^L} + (L-1)W
+\qquad \text{subject to } D = P/2^L \ge W,
+\end{equation}
+two raw elements plus $L-1$ state reveals, minimized only over the integer
+$L$ values whose resulting $D$ actually satisfies the floor.
+
+Ignoring the constraint first, to see where it binds: treating $L$ as
+continuous and minimizing over (continuous) $D = P/2^L$ gives the
+stationarity condition
+\begin{equation}
+\frac{d}{dD}\,\mathrm{size}(D) = 2 - \frac{W}{D \ln 2} = 0
+\quad\Longrightarrow\quad
+D^* = \frac{W}{2\ln 2}.
+\end{equation}
+For $W = 32$ bytes, $D^* \approx 23.08$ bytes -- strictly \emph{less} than
+$W=32$, i.e.\ the unconstrained stationary point lies entirely outside the
+feasible region $D \ge W$. Since $\mathrm{size}(D)$ is convex and its
+derivative is already positive at $D=W$ (the constraint boundary), the
+constrained optimum is not this stationary point at all, but simply the
+\emph{smallest feasible} $D$: $D = W$ exactly, using the identity encoding.
+Every power of two below $W$ is infeasible outright -- not merely
+suboptimal -- because the checkpoint cannot physically fit.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}rrrrl@{}}
+\toprule
+$L$ & $N = 2^L$ & $D = P/N$ (bytes) & Proof size (bytes) & Feasible? \\
+\midrule
+21 &   2{,}097{,}152 & 512.00 & 1664.00 & yes \\
+22 &   4{,}194{,}304 & 256.00 & 1184.00 & yes \\
+23 &   8{,}388{,}608 & 128.00 &  960.00 & yes \\
+24 &  16{,}777{,}216 &  64.00 &  864.00 & yes \\
+\textbf{25} &  \textbf{33{,}554{,}432} &  \textbf{32.00} &  \textbf{832.00} & \textbf{yes ($D=W$)} \\
+26 &  67{,}108{,}864 &  16.00 &  (832.00) & \textbf{no: $D<W$} \\
+27 & 134{,}217{,}728 &   8.00 &  (848.00) & \textbf{no: $D<W$} \\
+28 & 268{,}435{,}456 &   4.00 &  (872.00) & \textbf{no: $D<W$} \\
+\bottomrule
+\end{tabular}
+\caption{Sweep at fixed payload $P = 2^{30}$ bytes (1024 MiB), $W=32$
+bytes. Rows with $D<W=32$ (bracketed sizes) are not achievable FlatMerkle
+configurations at all -- a 32-byte checkpoint cannot be injectively
+embedded in a smaller block, under any encoding -- not merely worse than
+the optimum; their $\mathrm{size}(L)$ values are shown only to illustrate
+that the unconstrained continuous formula would (wrongly) suggest they
+help. The true, unique discrete minimum is $L=25$ ($D=32=W$, using the
+identity checkpoint encoding of Definition~\ref{def:padb}), 832.00 B --
+not a tie with any smaller $D$, and not the non-power-of-two, sub-$W$
+point $D\approx23.08$ the unconstrained continuous relaxation alone would
+suggest. A deployment that instead needs the $b>w$ terminator-byte
+encoding (e.g.\ to keep one spare byte for a domain-separation tag,
+Remark~\ref{rem:domain-sep-bit}) faces the stricter floor $D \ge W+1=33$
+bytes; since $D$ must itself be a power of two here ($D=P/2^L$ with both
+$P$ and $N$ powers of two), the smallest such $D$ is $64$, i.e.\ $L=24$,
+864.00 B.}
+\label{tab:optimal-toy}
+\end{table}
+
+\subsection{Real SHA-256: the block size is fixed at 64 bytes}
+\label{sec:optimal-real}
+
+The toy analysis assumes $D$ can be chosen freely, but SHA-256's block
+width is fixed at $b=512$ bits (64 bytes): every item of the structured
+file, data or $\mathrm{MID}$, occupies exactly one 64-byte block, and
+Section~\ref{sec:construction} does not pack several application records
+into one element. With a payload of $P$ bytes split into 64-byte elements,
+$N = P/64$, and since each proof reveal (a checkpoint) carries only its
+32-byte state, a single-element proof costs
+\begin{equation}
+\mathrm{size}(P) = 2 \times 64 + \big(\log_2(P/64) - 1\big) \times 32
+= 96 + 32\,\log_2(P/64) \text{ bytes}.
+\end{equation}
+This was verified directly against the real-SHA-256 implementation: for
+$N=32$ real 64-byte elements ($P = 2048$ bytes), the formula predicts
+$96 + 32\log_2(32) = 96 + 160 = 256$ bytes, which matches the measured
+proof size exactly.
+
+Unlike the toy case, where the two coincide at $D=W$, here FlatMerkle's
+proof is \emph{larger} than a Merkle proof over the same 64-byte elements:
+a Merkle proof carries one 64-byte leaf and $\log_2 N$ 32-byte siblings,
+$64 + 32\log_2(P/64)$ bytes, exactly 32 bytes less than FlatMerkle's, and
+it discloses no neighbouring element
+(Table~\ref{tab:real-sha256-sizes}). The difference is the second raw
+element of FlatMerkle's base pair (Section~\ref{par:pair-disclosure}).
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+$N$ & $P = 64N$ (bytes) & FlatMerkle proof (bytes) & Merkle proof (bytes) \\
+\midrule
+4  & 256  & 160 & 128 \\
+8  & 512  & 192 & 160 \\
+16 & 1024 & 224 & 192 \\
+32 & 2048 & 256 & 224 \\
+64 & 4096 & 288 & 256 \\
+\bottomrule
+\end{tabular}
+\caption{Real-SHA-256 FlatMerkle proof sizes, measured directly against the
+\texttt{loglink\_annex.py} implementation, matching
+$96 + 32\log_2(P/64)$ exactly at every scale tested, next to the size of a
+Merkle proof over the same 64-byte elements, $64 + 32\log_2 N$ (computed).}
+\label{tab:real-sha256-sizes}
+\end{table}

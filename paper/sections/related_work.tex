@@ -1,0 +1,87 @@
+\section{Related work}
+\label{sec:related-work}
+
+\subsection{Linking-based time-stamping}
+
+The closest structural antecedent we found is the \emph{binary linking
+scheme} of Buldas, Laud, Lipmaa, and Villemson \citep{buldas1998}, which
+improves the linear hash-chain time-stamping of Haber and Stornetta
+\citep{haber1991}. There, the $n$-th linking item is $L_n = H(H_n, L_{n-1},
+L_{f(n)})$: each item hashes the previous item and one earlier item at a
+power-of-two-structured distance $f(n)$, so that a verifying chain between
+any two items has length $O(\log n)$ (at most $3\lceil \log_2 n\rceil - 2$),
+and Buldas, Lipmaa, and Schoenmakers later gave optimally sized
+time-stamps for such schemes using threaded authentication trees
+\citep{buldas2000}. FlatMerkle's re-injection of $\CK[a]$ through
+$\mathrm{MID}(a)$ plays the same role as the back-link $L_{f(n)}$: it is
+what makes a distant point of the chain reachable in one step. The
+differences are in what is hashed and what is proved. In a linking scheme,
+each $L_n$ is the output of a separate hash invocation over several
+inputs, and the object being authenticated is the one-way dependence
+between two items, for relative temporal ordering. In FlatMerkle, the
+back-links are compression-function chaining states folded into a single
+Merkle--Damg\aa rd stream, so the commitment is the ordinary hash of one
+byte string, and the statements proved are inclusion of an element in that
+string and, via fraud proofs, malformation of its layout.
+
+\subsection{Authenticated append-only skip lists}
+
+Among authenticated data structures, the closest prior art we identified
+is Maniatis and Baker's
+\emph{authenticated append-only skip lists} (AASL)
+\citep{maniatis2003}, itself building on the persistent authenticated
+dictionary of Goodrich, Tamassia, and Schwerin
+\citep{goodrich2001}. Both use the same deterministic,
+power-of-two skip-index structure that FlatMerkle's position formula
+(Lemma~\ref{lem:position}) also produces, and both achieve $O(\log N)$
+membership and append proofs.
+
+The mechanisms differ, however: AASL is a genuine skip list, with distinct,
+separately tagged hash nodes at each level connected by explicit pointers,
+computed via multiple separate hash-function invocations per node.
+FlatMerkle achieves the equivalent skip structure without any separate
+node objects or multiple hash invocations -- everything is a single,
+continuous Merkle--Damg\aa rd stream, and the ``skip'' capability comes
+entirely from re-injecting the same hash function's own internal state
+back into that one stream. This is what allows FlatMerkle's digest to be a
+literal, unmodified, single-pass hash of the raw structured bytes (Section
+\ref{sec:bitcoin-annex}) -- a property we are not aware of AASL, its
+predecessors, or the linking schemes above offering, since their
+commitments are tied to their own multi-node hash structure rather than a
+flat byte stream.
+
+\subsection{Other related, but structurally distinct, work}
+
+\begin{itemize}
+\item \textbf{Proofs of sequential work}~\citep{mahmoody2013sequential} and
+  related hash-chaining constructions also reuse intermediate hash states,
+  but for a different purpose (proving elapsed sequential computation) and
+  without the recursive, doubling checkpoint structure needed for
+  logarithmic inclusion proofs.
+\item \textbf{Historical/tamper-evident logging} (e.g.\ Crosby and Wallach's
+  history trees \citep{crosby2009}) targets a related but distinct problem
+  -- efficient proofs of consistency between two versions of an append-only
+  log -- using an explicitly tree-shaped structure. The underlying
+  probabilistic skip list data structure itself traces back to
+  \citet{pugh1990}.
+\item \textbf{Merkle mountain ranges}~\citep{todd2016mmr} generalize Merkle
+  trees to efficiently-appendable forests of perfect binary trees, but
+  remain tree-shaped structures, not a single linear hash stream.
+\item \textbf{Bitcoin's own (unrelated) use of ``skip lists''} for block
+  header lookups (e.g.\ for efficient median-time-past or difficulty
+  retargeting queries) skips over \emph{block headers} via explicit stored
+  pointers between blocks, not via hash-chain state re-injection, and
+  solves a different problem (locating a specific historical block quickly)
+  than proving inclusion inside a single committed dataset.
+\end{itemize}
+
+\subsection{Scope of this comparison}
+
+This is a targeted literature search focused on the specific technique of
+achieving logarithmic proofs from a single linear hash stream via
+compression-state re-injection, not an exhaustive survey of authenticated
+data structures or of the time-stamping literature, and not a patent
+search. We are not aware of prior work using exactly this mechanism, but we note this as ``apparently
+undocumented in what we found,'' not as a claim of novelty suitable for a
+patent filing or a definitive related-work section without independent
+verification.

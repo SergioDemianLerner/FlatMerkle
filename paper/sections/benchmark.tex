@@ -1,0 +1,106 @@
+\section{Construction speed vs.\ a Merkle tree}
+\label{sec:benchmark}
+
+Proof size is only half the comparison against Merkle trees; the other is
+build time. We measured this directly, using the identical hand-rolled
+SHA-256 compression function of the reference implementation
+(\texttt{sha256\_core.py}) for every hash performed on every side --
+same language, same implementation, no library shortcut on one side and not
+the other -- across three constructions:
+
+\begin{enumerate}
+\item \textbf{FlatMerkle}, as described in this paper: $2N-2$ items plus one
+  finalization, $2N-1$ compression calls total.
+\item \textbf{Merkle tree, same convention}: one compression call per node
+  (leaf $= \C(\mathrm{IV}, \text{element})$, internal $= \C(\mathrm{IV},
+  \text{left} \Vert \text{right})$), no per-node padding -- an
+  equally-optimized tree, isolating the tree-vs-chain question with no
+  artificial handicap on either side. $N$ leaves $+ (N-1)$ internal nodes
+  $= 2N-1$ calls.
+\item \textbf{Merkle tree, standard}: every node is its own independently
+  padded, finalized SHA-256 call -- i.e.\ what many real Merkle tree
+  implementations that hash with a single, ordinary SHA-256 per node
+  actually do. A 64-byte node input needs 2 compression calls once padded
+  and length-encoded, so this costs $4N-2$ calls total. (Bitcoin's own
+  transaction Merkle tree is not an instance of this convention: it
+  combines each pair of nodes with \emph{double}-SHA256 -- SHA256 applied
+  twice, i.e.\ two independent finalized hashes chained together -- which
+  this benchmark does not measure and is more expensive still than either
+  convention above.)
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Method & $N$ & Seconds & Compress calls & Calls/element \\
+\midrule
+FlatMerkle              & 8{,}192  &  1.37 & 16{,}383 & 2.000 \\
+Merkle, same convention & 8{,}192  &  1.36 & 16{,}383 & 2.000 \\
+Merkle, standard        & 8{,}192  &  2.73 & 32{,}766 & 4.000 \\
+\midrule
+FlatMerkle              & 65{,}536 & 11.03 & 131{,}071 & 2.000 \\
+Merkle, same convention & 65{,}536 & 10.78 & 131{,}071 & 2.000 \\
+Merkle, standard        & 65{,}536 & 21.68 & 262{,}142 & 4.000 \\
+\bottomrule
+\end{tabular}
+\caption{Construction speed, real measurements. Calls/element ratios are
+the exact rationals $2-1/N$ (FlatMerkle and the same-convention tree) and
+$4-2/N$ (the standard tree), which already round to 2.000/4.000 to three
+decimals at these scales ($16383/8192 = 1.99988\ldots$) -- not an
+empirical coincidence, but not literally exact integers either, only in
+the $N \to \infty$ limit.}
+\label{tab:benchmark}
+\end{table}
+
+Two findings, both borne out at both measured scales:
+
+\begin{enumerate}
+\item \textbf{Against an equally-optimized Merkle tree, FlatMerkle is not
+  faster to build} -- measured construction time is within 1--2\% either
+  way (ratio 0.98--0.99$\times$) at both scales tested, well inside the
+  noise expected from a single run each; we do not have repeated-trial
+  variance data to call this a rigorously established statistical tie,
+  only a close match consistent with the two methods' identical call
+  counts. This is expected: FlatMerkle emits $2N-2$ items and a
+  same-convention Merkle tree performs $2N-1$ calls -- essentially the same
+  work either way. The value of FlatMerkle was never faster construction;
+  it is that the resulting commitment is a flat hash of raw bytes
+  (Section~\ref{sec:bitcoin-annex}), which a Merkle root is not, and that
+  proofs need no separate tree-traversal metadata.
+\item \textbf{Against the independently-finalized single-SHA-256
+  Merkle-tree convention benchmarked here (\emph{Merkle tree, standard}
+  above, matching many real Merkle tree implementations that hash each
+  node with one ordinary, self-contained SHA-256 call) -- FlatMerkle is
+  almost exactly $2\times$ faster} (ratio 1.96--2.00$\times$), because a
+  64-byte node input needs two compression calls once padded and
+  length-encoded, where FlatMerkle's continuous stream needs only one call
+  per item and pays for padding exactly once, for the whole file. (This
+  specific comparison does not include Bitcoin's own transaction Merkle
+  tree, which uses double-SHA256 per node rather than this convention --
+  see the note above.)
+\end{enumerate}
+
+Extrapolating to $N = 2^{20} = 1{,}048{,}576$ elements from the exact
+call-count formulas ($2N-1$ for FlatMerkle and the same-convention tree,
+$4N-2$ for the standard tree) and the throughput measured at
+$N=65{,}536$, pooled across the three methods ($\approx 12{,}057$ calls/s;
+the per-method figures, $11{,}880$ / $12{,}164$ / $12{,}093$, differ by
+about $\pm2\%$, which we treat as noise) gives $\approx 174$\,s for
+FlatMerkle and the same-convention tree and $\approx 348$\,s for the
+standard tree. That the first two come out identical is an artifact of
+applying one pooled rate to equal call counts, not a claim that equal call
+counts guarantee equal wall-clock time. These are computed extrapolations,
+not timed runs.
+
+All of these comparisons are single-threaded. FlatMerkle's chaining is
+inherently sequential: each checkpoint is the running state after
+everything before it. The message-schedule expansion of each of the $N$
+data blocks, a substantial part of a compression call, can still be
+precomputed in parallel, since data blocks are known in advance; only the
+$\mathrm{MID}$ blocks and the chaining itself must run in order. A Merkle
+tree's subtrees, by contrast, can be hashed entirely in parallel, so on
+multi-core hardware a parallel Merkle build can pull ahead of FlatMerkle
+by close to the core count at large $N$. How much of FlatMerkle's
+sequential fraction a parallel implementation could hide is not something
+we measured here.

@@ -1,0 +1,148 @@
+\section{Discussion and conclusion}
+\label{sec:conclusion}
+
+\subsection{Beyond SHA-256: sponge-based hash functions}
+
+The construction as presented relies on Assumption~\ref{ass:mdaccess}: a
+Merkle--Damg\aa rd hash with an exposed, fixed-width compression function
+whose entire internal state is exposed at every step. This holds for
+SHA-256, but not for sponge constructions such as Keccak-256 (used, in its
+non-NIST-standardized form, by Ethereum), and adapting FlatMerkle to a
+sponge is not a drop-in change:
+
+\begin{itemize}
+\item Keccak-f[1600]'s internal state (1600 bits, 200 bytes) is larger than
+  its absorbable rate per permutation call (1088 bits, 136 bytes for the
+  256-bit-output parameterization), so a full checkpoint cannot be
+  re-injected in a single call the way a 32-byte SHA-256 state fits inside
+  one 64-byte block; either a squeezed/truncated summary must be re-absorbed
+  instead of the raw state, or a checkpoint must be spread across multiple
+  absorb calls.
+\item The naive analog of $\C$ for a sponge -- one absorption step,
+  $\C(s,m) = P(s \oplus (m \,\Vert\, 0^c))$ for the Keccak-f[1600]
+  permutation $P$, rate $r$ bits, capacity $c$ bits ($r+c=1600$), and
+  $m \in \{0,1\}^r$ -- is \emph{not} a plausible candidate for an
+  assumption analogous to Assumption~\ref{ass:freestart}: it is trivially
+  breakable, with no computation at all. $P$ is a permutation (injective),
+  so it has no collisions of its own, but the absorption step built from it
+  does: for any nonzero $\delta \in \{0,1\}^{r}$ -- \emph{rate}-sized,
+  matching $m$'s own width, not the capacity -- the pair
+  $s' = s \oplus (\delta \,\Vert\, 0^{c})$, $m' = m \oplus \delta$ satisfies
+  \[
+  s' \oplus (m' \,\Vert\, 0^c) = s \oplus (\delta \,\Vert\, 0^c) \oplus
+  \big((m \oplus \delta) \,\Vert\, 0^c\big) = s \oplus (m \,\Vert\, 0^c)
+  \]
+  since the two $(\delta \,\Vert\, 0^c)$ terms cancel under XOR -- the
+  \emph{same} permutation input, hence $\C(s,m) = \C(s',m')$ with
+  $(s,m) \ne (s',m')$: a free-start collision found by inspection, not
+  cryptanalysis. (A capacity-sized $\delta$, added only to $s$'s capacity
+  portion with no matching change to $m$, would \emph{not} work: $m$'s own
+  XOR never reaches the capacity portion at all, so nothing would cancel
+  it. The trivial collision instead exploits the \emph{rate} portion, which
+  $s$ and $m$ both act on.) This is not a defect specific to Keccak; it is
+  a structural property of building a single-call ``compression function''
+  directly out of a sponge's absorption step: free-start collision
+  resistance (Assumption~\ref{ass:freestart}) requires the \emph{entire}
+  starting state $s$ to be safely adversary-chosen, but the rate portion of
+  $s$ and the message $m$ act on the permutation's input in exactly the
+  same additive way, so any adversarial freedom to choose $s$'s rate bits
+  is redundant with -- and trivially cancels against -- the freedom to
+  choose $m$. A sponge-based FlatMerkle variant therefore cannot simply
+  substitute $P$ for $\C$ and inherit Section~\ref{sec:security}'s security
+  argument; it would need a fundamentally different re-injection mechanism
+  -- one that does not hand an adversary this redundant rate/message
+  freedom, e.g.\ re-injecting only squeezed output through the rate
+  portion while the capacity is never adversarially set and the rate is
+  never simultaneously free on both sides of a single absorb call -- and a
+  correspondingly different security assumption and proof, not merely
+  ``its own independent justification'' for the same one.
+\item Ethereum's Keccak-256 uses the original Keccak padding (suffix
+  \texttt{0x01}), not NIST SHA3-256's domain-separated padding (suffix
+  \texttt{0x06}); an EVM-targeted variant would need to pin down the exact
+  finalization convention to match on-chain verification, in addition to
+  resolving the free-start-assumption problem above.
+\end{itemize}
+
+We consider a sponge-based FlatMerkle variant a natural and promising
+direction for future work, but a genuinely separate construction requiring
+its own from-scratch mechanism, security analysis, and implementation, not
+a parameter change to the scheme presented here.
+
+\subsection{Incremental growth}
+
+Doubling the number of elements from $N$ to $2N$ turns out to be a pure
+append at the byte level:
+\begin{equation}
+F(2N) = F(N) \,\Vert\, \mathrm{MID}(0) \,\Vert\, \mathrm{block}(N, L)
+\end{equation}
+-- the old file's bytes are untouched, followed by one new $\mathrm{MID}$
+block (re-injecting the public $\mathrm{IV}$, essentially free) and a
+fresh, self-contained block for the new elements. We verified this
+directly against the reference implementation for $N \in \{8,16,32\}$: the
+old file is always an exact byte-for-byte prefix of the new one. This is a
+narrower property than what the append-only structures of
+Section~\ref{sec:related-work} offer, though, and the comparison should not
+be overstated: AASL~\citep{maniatis2003} and Merkle mountain
+ranges~\citep{todd2016mmr} both support appending \emph{one} new element at
+a time, with the structure remaining valid and provable after every single
+append; what we have shown here is only that \emph{exact doubling} is a
+pure append, not that FlatMerkle supports incremental single-element
+growth in general -- Section~\ref{sec:non-power-of-two} below is exactly
+the missing piece that would be needed for that. What we
+have not yet worked out is the cheapest way to \emph{upgrade} an existing
+proof for an index among the old $N$ elements so it remains valid against
+the new digest -- it appears to need only a small, index-dependent
+extension rather than a full rebuild, but we leave a precise statement and
+proof of that to future work.
+
+\subsection{Non-power-of-two $N$}
+\label{sec:non-power-of-two}
+
+The construction as presented requires $N$ to be an exact power of two.
+Real datasets essentially never satisfy this exactly, and this paper does
+not currently specify a recommended handling: padding up to the next power
+of two is simplest but can waste up to nearly $2\times$ the space in
+padding elements alone, while an asymmetric ``leftmost complete subtree''
+construction (in the style of RFC 6962's Merkle
+tree~\citep{rfc6962}) would avoid the
+waste at the cost of a more complex, size-dependent position formula and
+branch rule. We leave working out and analyzing that variant to future
+work.
+
+\subsection{Summary}
+
+FlatMerkle shows that the tree-shaped structure of a Merkle tree is not
+actually necessary to obtain $O(\log N)$ inclusion proofs -- only a
+disciplined way of periodically making the hash function's own internal
+state independently revealable is. This lets logarithmic-space,
+logarithmic-time inclusion proofs coexist with commitments that are,
+syntactically, ordinary flat hashes of ordinary byte strings -- a property
+specifically useful wherever the commitment layer
+was fixed for other reasons and cannot be changed to accommodate a
+tree-shaped hash, as in the Bitcoin transaction annex application of
+Section~\ref{sec:bitcoin-annex}. The construction's security reduces
+cleanly to free-start collision resistance of the underlying compression
+function (Theorem~\ref{thm:soundness}), and its single-threaded
+construction speed is essentially tied with an equally-optimized Merkle
+tree and roughly $2\times$ faster than how Merkle trees are conventionally
+implemented in practice (Section~\ref{sec:benchmark}) -- though FlatMerkle's
+chaining is inherently sequential in a way an ordinary Merkle tree's
+independent subtrees are not, so a parallelized multi-core Merkle build can
+close or reverse that gap at large $N$ (Section~\ref{sec:benchmark}
+discusses how much of FlatMerkle's own work can still be precomputed in
+parallel). Soundness against equivocation --
+no digest can be made to accept two conflicting answers for the same index
+-- holds regardless of whether the file was canonically built, under
+Assumption~\ref{ass:freestart} (Theorem~\ref{thm:binding}; ``unconditional''
+here means unconditional with respect to \emph{file canonicity}, not
+unconditional cryptographically), but soundness against
+a \emph{non-canonically built} file does not come for free: a malicious
+publisher genuinely can construct a file that admits an accepting proof for
+data other than what a reader would find at that position
+(Remark~\ref{rem:layout-forgery}). What restores a practical guarantee here
+is the fraud-proof mechanism of Section~\ref{sec:fraud-proofs}: any party
+willing to hold the whole file can detect such a deviation in $O(N)$ and
+prove it in $O(\log N)$, turning FlatMerkle's trust model, for files whose
+canonicity is not otherwise attested to, into an optimistic one -- safe by
+default, and falsifiable by a single honest watcher within a challenge
+window, rather than unconditionally safe with no watcher required at all.

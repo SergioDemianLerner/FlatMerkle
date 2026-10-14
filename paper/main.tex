@@ -1,0 +1,139 @@
+\documentclass[11pt]{article}
+
+% ---------------------------------------------------------------------------
+% Packages
+% ---------------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[expansion=false]{microtype}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage[numbers,sort&compress]{natbib}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+% Lightweight algorithm float + pseudocode listing style, in place of the
+% algorithm/algpseudocode packages (not available in this build environment).
+\floatstyle{ruled}
+\newfloat{algorithm}{htbp}{loa}[section]
+\floatname{algorithm}{Algorithm}
+
+\lstdefinestyle{pseudo}{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  keywords={function,end,if,else,then,for,while,do,return,and,or,not},
+  columns=fullflexible,
+  breaklines=true,
+  showstringspaces=false,
+  xleftmargin=1em,
+  frame=none
+}
+
+% ---------------------------------------------------------------------------
+% Theorem environments
+% ---------------------------------------------------------------------------
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{remark}[theorem]{Remark}
+
+% ---------------------------------------------------------------------------
+% Notation macros
+% ---------------------------------------------------------------------------
+\newcommand{\C}{\mathcal{C}}
+\newcommand{\D}{\mathrm{D}}
+\newcommand{\CK}{\mathrm{CK}}
+\newcommand{\popcount}{\mathrm{popcount}}
+% Marks a "free" value-naming line (no data emitted, no separate
+% computation) in gray, as distinct from a bold-black "emit" line. Chosen
+% over \textit{}/\emph{} because math-mode \mathrm{...} content does not
+% reliably pick up an italic shape, but does reliably pick up color.
+\newcommand{\snap}[1]{\textcolor{black!55}{#1}}
+
+\title{\textbf{FlatMerkle: Logarithmic-Space Inclusion Proofs\\ over a Single Linear Hash Stream}}
+\author{Sergio Demian Lerner \\ \texttt{sergio@fairgate.io}%
+  \thanks{This paper, its accompanying illustrations, and its reference
+  implementation were prepared with the assistance of Anthropic's Claude
+  (Sonnet 5, Sonnet 5.5, and Opus 5.5) as an AI writing and coding
+  assistant, and reviewed with the assistance of GPT 5.6 SOL. All claims
+  about the construction were independently verified against the
+  executable reference implementation described herein.}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Merkle trees are the standard way to obtain logarithmic-size, logarithmic-time
+inclusion proofs over a large dataset, but they require a tree-shaped hash
+structure distinct from the ordinary, linear (Merkle--Damg\aa rd) hashing that
+most deployed systems -- including Bitcoin's own transaction and witness
+hashing -- actually perform. We present FlatMerkle, a construction that
+achieves the same asymptotic guarantees, $O(\log N)$ proof size and
+$O(\log N)$ verification time, over a single ordinary linear hash stream, by
+periodically re-injecting the hash function's own past internal states
+(``checkpoints'') back into the stream as ordinary message content. The
+result is a flat byte sequence whose digest is a single, unmodified
+invocation of the underlying hash function -- syntactically an ordinary
+digest of an ordinary byte string, not a distinguishable commitment format
+-- while still supporting compact inclusion proofs for any element, and
+compact proofs that a published file is malformed, so that an honest party
+can always answer a malicious committer in logarithmic space. We give the recursive
+construction, a closed-form formula locating any element in the structured
+stream, worked examples with illustrations, a security reduction to free-start
+collision resistance of the hash function's compression step, an optimal
+element-size analysis for both a flexible toy primitive and real SHA-256,
+a batched multi-element proof construction, a measured construction-speed
+comparison against Merkle trees, a concrete application to committing data
+inside a Bitcoin transaction annex (BIP-341), a design sketch using that
+application as a data-availability layer for an optimistic Bitcoin rollup,
+a from-scratch gas-cost comparison, on Ethereum, Rootstock, and Arbitrum,
+of an in-contract FlatMerkle commitment against an in-contract Merkle
+tree, tracing the three chains' differing verdicts to specific protocol
+design choices rather than to anything intrinsic to either construction,
+and a comparison against the closest prior art we are aware of,
+authenticated append-only skip lists.
+Every number, table, and figure about the construction itself was checked
+against an executable, self-tested reference implementation, described at
+the end of Section~\ref{sec:intro}; the gas-cost figures are derived from
+cited protocol constants.
+\end{abstract}
+
+\tableofcontents
+
+\input{sections/introduction}
+\input{sections/construction}
+\input{sections/proof_algorithm}
+\input{sections/examples}
+\input{sections/security}
+\input{sections/optimal_size}
+\input{sections/multiproof}
+\input{sections/benchmark}
+\input{sections/bitcoin_annex}
+\input{sections/rollup_da}
+\input{sections/rollup_da_ethereum}
+\input{sections/related_work}
+\input{sections/conclusion}
+
+\appendix
+\input{sections/appendix_eth_da}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

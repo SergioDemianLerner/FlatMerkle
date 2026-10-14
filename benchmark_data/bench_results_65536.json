@@ -1,0 +1,20 @@
+{
+  "loglink": {
+    "N": 65536,
+    "seconds": 11.03255633799563,
+    "compress_calls": 131071,
+    "digest": "3494dd73d69250dd6550610c043484ca3c46fc8f5c05532058a9641aafebb5fb"
+  },
+  "merkle_fast": {
+    "N": 65536,
+    "seconds": 10.775342380999064,
+    "compress_calls": 131071,
+    "root": "460294db02e7c6b58a8e7523b1d6d79c8f66ef4b5fbe0256dad95dc0cd8f97fe"
+  },
+  "merkle_standard": {
+    "N": 65536,
+    "seconds": 21.6776883440034,
+    "compress_calls": 262142,
+    "root": "1e3b0fe81fc33e6afc13a8ada40ac3380a2ac9bab64e5dede80cf2a57d96aa80"
+  }
+}

@@ -1,0 +1,156 @@
+\section{Introduction}
+\label{sec:intro}
+
+An inclusion proof lets a verifier, given only a short commitment to a large
+dataset, confirm that a particular element is really part of that dataset --
+without holding the dataset itself. The standard tool for this is the Merkle
+tree \citep{merkle1980}: leaves are hashed, pairs of hashes are hashed
+together recursively up to a root, and an inclusion proof consists of the
+$O(\log N)$ sibling hashes on the path from a leaf to the root. Both proof
+size and verification time are $O(\log N)$ in the number of elements $N$.
+
+This efficiency comes at a structural cost: the committed data must be hashed
+\emph{as a tree}. Many real systems, however, do not have that freedom. A
+Bitcoin transaction's witness data, for instance, can carry an optional
+\emph{annex}, whose commitment is defined by BIP-341 \citep{bip341} as a
+single, ordinary SHA-256 of the annex bytes -- a flat, linear
+Merkle--Damg\aa rd hash, with no tree structure available at the consensus
+layer: consensus only ever computes $\mathrm{SHA256}(\text{annex bytes})$,
+once, linearly.
+
+\subsection*{Threat model}
+
+The setting this paper targets is adversarial on the committing side. One
+party -- the \emph{committer} -- publishes data and its digest; other
+parties -- \emph{opponents} -- later need to convince a verifier who holds
+only the digest (a Bitcoin script, a dispute program, a contract) of facts
+about that data. The requirement is that, for \emph{every} byte string the
+committer might publish, an honest opponent who holds it can always prove
+something in $O(\log N)$ space and verification time: either the
+inclusion of any element, or -- if the commitment is malformed so that
+inclusion proofs for the published data cannot be built -- the
+malformation itself. A malicious committer will choose whichever of the
+two is weaker, so if either proof costs $O(N)$, the scheme as a whole
+offers only $O(N)$ guarantees.
+
+This is what rules out the obvious way of embedding a Merkle tree in a
+linearly hashed field. Appending a Merkle root as the field's last 32 bytes
+gives logarithmic inclusion proofs (one compression call from a revealed
+midstate opens the root, then an ordinary Merkle path), but a committer can
+publish a root that disagrees with the published data at a single position
+near the start. Exposing that requires proving which bytes physically sit at
+that position, and in a linear hash this means recomputing the chain from
+there to the end: $O(N)$. Section~\ref{sec:annex-alternatives} compares this
+and other alternatives in detail.
+
+This raises a natural question: can a \emph{linear} hash stream support
+$O(\log N)$ inclusion proofs \emph{and} $O(\log N)$ proofs of malformation,
+without changing what is actually hashed at the commitment layer?
+
+\subsection*{This paper}
+
+We show that it can. The idea is simple to state: periodically, as the
+stream is hashed, re-inject the hash function's own current internal state
+back into the stream as if it were ordinary message content. Later, a proof
+can reveal one of these re-injected states instead of the raw data it
+summarizes, letting the verifier skip an entire sub-range of the file in a
+single hash-function call. Applied recursively at doubling distances
+($2, 4, 8, 16, \dots$), this yields the same $O(\log N)$ proof size and
+$O(\log N)$ verification time as a Merkle tree -- while the file, from the
+outside, is still just one ordinary flat hash of one ordinary byte string.
+Because the re-injected states make any position of the stream reachable in
+$O(\log N)$ calls, the same mechanism also lets an opponent prove, in
+$O(\log N)$, that a published file deviates from the canonical layout
+(Section~\ref{sec:fraud-proofs}), meeting both halves of the threat model.
+The price is size: the structured file is about twice the size of the raw
+data (Section~\ref{sec:construction}).
+We call the resulting structure \textbf{FlatMerkle}.
+
+The security of the construction rests on a specific, well-studied but
+non-standard assumption: \emph{free-start} collision resistance of the
+hash function's raw compression step (Section~\ref{sec:security}) -- the
+hardness of finding a compression-function collision when the adversary is
+free to choose the starting state, not just the message. This is strictly
+stronger than the ordinary (IV-fixed) collision resistance that hash
+functions are normally analyzed under, and we state it as an explicit,
+separate assumption rather than treating it as automatic.
+
+\subsection*{Contributions}
+
+\begin{itemize}
+\item A formal recursive construction of the structured file, and a
+  closed-form formula, $\mathrm{position}(a) = 2a - \popcount(a)$, that
+  locates any original element's \emph{item index} within the structured
+  stream without a lookup table -- a count of items, not literally a byte
+  offset; multiplying by the fixed per-item byte width gives the byte
+  offset (Section~\ref{sec:construction}). The inclusion-proof path itself
+  comes from a separate, simpler branch rule (Section~\ref{sec:algorithm}).
+\item Single-element proof construction and verification algorithms, with
+  worked examples and illustrations for a 16-element file
+  (Sections~\ref{sec:algorithm}--\ref{sec:examples}).
+\item A security reduction: forging a FlatMerkle inclusion proof, or making
+  a single digest accept two conflicting answers for the same index,
+  implies finding a free-start collision in the underlying compression
+  function. This binding guarantee does \emph{not} extend to files that
+  were never canonically built in the first place -- we give a working
+  forgery against that stronger claim -- so we also give a complementary
+  $O(N)$-detect/$O(\log N)$-prove fraud-proof mechanism that lets any party
+  holding the full file catch and prove a non-canonical layout, turning
+  soundness against a malicious publisher into an optimistic rather than
+  unconditional guarantee (Section~\ref{sec:security}).
+\item Optimal element-size analysis minimizing average proof size, both for
+  a size-flexible toy primitive and for real, fixed-block SHA-256
+  (Section~\ref{sec:optimal-size}).
+\item A batched multi-element inclusion proof construction with measured
+  space savings against $m$ independent proofs (Section~\ref{sec:multiproof}).
+\item A measured construction-speed comparison against Merkle trees, using
+  an identical from-scratch SHA-256 compression function on both sides
+  (Section~\ref{sec:benchmark}).
+\item A concrete application: committing a FlatMerkle structured file inside
+  a Bitcoin transaction annex, so that BIP-341's existing
+  $\mathrm{SHA256}(\text{annex})$ commitment doubles as a FlatMerkle root,
+  with no consensus changes (Section~\ref{sec:bitcoin-annex}).
+\item A design sketch composing this annex application with BitVMX and
+  BitVM3, two Bitcoin computation-verification protocols, and ESSPI
+  \citep{lerner2024bitvmx,linuswoll2026bitvm3,lerner2025esspi} to use a
+  FlatMerkle-committed annex as the data-availability layer for an
+  optimistic rollup, with watchtowers disputing both non-canonical layouts
+  and individually incorrect state transitions
+  (Section~\ref{sec:rollup-da}).
+\item A from-scratch gas-cost comparison of four ways to commit rollup
+  calldata on-chain, using current protocol constants, on Ethereum,
+  Rootstock, and Arbitrum
+  \citep{eip2028,eip4844,eip7623,eip2929,eip2200,eip152,rsk2022,rskip400,rskip153,rskip239,rskjgascost,arbos40,arbos51}:
+  the three chains disagree on whether an in-contract FlatMerkle
+  commitment or an in-contract Keccak Merkle tree is cheaper, tracing the
+  difference to two separable protocol design choices (a calldata floor
+  and a warm-call discount for precompiles) rather than to anything about
+  FlatMerkle itself; both remain a clear improvement over submitting an
+  externally built FlatMerkle file or persisting the raw data in storage,
+  on all three chains (Section~\ref{sec:rollup-eth}).
+\item A comparison against the closest prior art we identified, authenticated
+  append-only skip lists \citep{maniatis2003,goodrich2001}
+  (Section~\ref{sec:related-work}).
+\end{itemize}
+
+Every number, table, and figure about the construction itself was
+produced by an executable, self-tested reference implementation (a
+size-flexible toy compression function and a real-SHA-256 variant), not
+asserted from hand calculation. The exceptions are the EVM gas-cost figures
+of Section~\ref{sec:rollup-eth} and Appendix~\ref{app:eth-da}, which are
+derived by hand from cited protocol constants plus a flagged estimate, and
+the build-time extrapolation of Section~\ref{sec:benchmark}. For single-element proofs, the self-tests flip every
+individual revealed value, one at a time, for every index at every tested
+$N$, and confirm rejection; multiproofs are checked the same way across
+many randomized target sets, tampering the data, the claimed data, one
+shared reveal, the index-to-pair assignment, and the pair set per trial. The reference implementation -- filenames retain ``LogLink,'' this
+project's working name before it was renamed FlatMerkle; the construction
+itself is unaffected -- \texttt{loglink.py} (toy compression function),
+\texttt{loglink\_annex.py} (real SHA-256),
+\texttt{illustrate.py} (figures), \texttt{fraud\_proof.py} and
+\texttt{simulate\_fraud\_proofs.py} (Section~\ref{sec:fraud-proofs}),
+\texttt{experiments.py} and \texttt{benchmark.py} (Sections~\ref{sec:multiproof}
+and~\ref{sec:benchmark}) -- accompanies this paper; a line-by-line Java
+transliteration of the core algorithms also exists for cross-language
+sanity-checking, but should not be read as an independently designed
+second implementation.

@@ -1,0 +1,148 @@
+\section{Application: an EVM rollup calldata commitment}
+\label{sec:rollup-eth}
+
+FlatMerkle applies equally to an EVM-compatible rollup's data-availability
+problem, though for a narrower reason than on Bitcoin: on an EVM chain,
+FlatMerkle is not the cheapest way to publish a byte, only the cheapest way
+we find to make an already-published, already-expensive byte cheaply
+disputable while keeping it \emph{persistently} available. We work this out
+in full for Ethereum first, then redo the same four options against
+Rootstock \citep{rsk2022}, a Bitcoin-merge-mined, EVM-compatible sidechain,
+and against Arbitrum \citep{arbos40}, an Ethereum rollup in its own right --
+not as further illustrations of the same result, but because the three
+chains turn out to disagree with each other on which option wins, for a
+reason worth understanding: the ranking depends on specific,
+independently adoptable protocol rules, not on anything intrinsic to
+FlatMerkle or to the EVM itself. The full, from-scratch derivation --
+every gas constant cited to its defining EIP, RSKIP, or ArbOS release
+note, every non-protocol approximation flagged as such -- is given in
+Appendix~\ref{app:eth-da}; this section states the setup, the four
+options being compared, and (\S\ref{sec:rollup-eth-results}) the result.
+
+\subsection{Why calldata, not blobs}
+\label{sec:rollup-eth-setup}
+
+A rollup sequencer can publish its batch data to Ethereum in ordinary
+transaction \emph{calldata}, costed at 16 gas per non-zero byte (4 gas per
+zero byte), a protocol constant unchanged since 2019
+\citep{eip2028}. Since Dencun, it can instead publish the same bytes in a
+\emph{blob} \citep{eip4844}: a separate, independently fee-market-priced
+resource (blob gas is charged 1:1 against a blob's $131{,}072$ bytes,
+BLOB\_GAS\_PER\_BLOB $=2^{17}$), historically far cheaper per byte than
+calldata when blobspace demand is low -- though this ratio floats with two
+independent, unrelated fee markets and is not a fixed protocol constant, so
+we do not rely on any particular multiple here. The catch, stated directly
+in EIP-4844's own text, is that blobs are not meant to be kept: ``[the
+consensus layer] blobs must be kept for at least a certain period[,] around
+18 days'' (\texttt{MIN\_EPOCHS\_FOR\_BLOB\_SIDECARS\_REQUESTS}
+$=4096$ epochs) \citep{eip4844}, after which nodes are free to discard
+them. A rollup that wants Ethereum itself to remain a permanent record --
+so that a new L2 node can reconstruct the entire rollup state by replaying
+L1 history alone, indefinitely, the way this paper's other applications
+assume the underlying chain's data stays available -- cannot rely on
+blobs for that role; ordinary calldata, once included in a block, has no
+comparable expiry. This section is about that persistent, expensive-by-design
+case: given a sequencer already pays calldata's price to publish $P$ bytes
+permanently, what is the cheapest way to also get a compact, on-chain,
+disputable commitment to those bytes? On Rootstock the question is not even
+a choice: there is no blob-carrying transaction type there at all, so
+calldata (or contract storage) is the only way to publish data on-chain in
+the first place, making a cheap on-chain commitment mechanism, if anything,
+more directly load-bearing there than on Ethereum, not less.
+
+\subsection{Four ways to commit to published calldata}
+\label{sec:rollup-eth-options}
+
+\begin{enumerate}
+\item[A.] Copy the calldata into contract storage (\texttt{SSTORE}) and
+  keep it there.
+\item[B.] Build an ordinary Keccak256 Merkle tree over the calldata inside
+  the contract, store only the 32-byte root, and discard everything else.
+\item[C.] Build a FlatMerkle structured file over the data \emph{off-chain},
+  submit the whole structured file as calldata, and hash it on-chain in one
+  call to the SHA-256 precompile (address \texttt{0x02}), storing only the
+  digest.
+\item[D.] Build the FlatMerkle structured file \emph{inside} the contract,
+  from ordinary (unstructured) calldata, hashing it incrementally via the
+  BLAKE2 compression-function precompile (address \texttt{0x09},
+  \citep{eip152}), storing only the final digest.
+\end{enumerate}
+
+Option D uses BLAKE2b's compression function $F(h, m, t, f)$ as $\C$. Besides
+the chaining value $h$ and the message block $m$, $F$ takes a byte counter
+$t$ and a final-block flag $f$, and the precompile accepts any values for
+both. A FlatMerkle instantiation must fix them from the item's position
+alone -- for example, $t$ the running byte count $128 \cdot (\text{item
+index} + 1)$ and $f = 0$ for every item, with any finalization applied as a
+separate fixed step -- in the contract that builds the file and in any verifier that
+later checks a proof against its digest, and must never take them from a
+proof. Otherwise a proof could vary them, and
+Assumption~\ref{ass:freestart}, which is stated for a fixed function of
+$(h,m)$, would no longer cover the verifier's computation
+(Remark~\ref{rem:freestart-history} discusses BLAKE2b's own security
+margin).
+
+Options B and D need no fraud-proof machinery of the kind
+Section~\ref{sec:fraud-proofs} gives for the Bitcoin annex application: the
+commitment is built by trusted contract code from data the contract itself
+received, so it cannot be non-canonical the way an externally supplied
+FlatMerkle file (option C, or the Bitcoin annex of
+Section~\ref{sec:bitcoin-annex}) can be. A later dispute over the
+\emph{data itself} (was this the right previous state? did this transaction
+really produce this result?) is a separate, application-level question this
+section does not address, matching Section~\ref{sec:rollup-da}'s treatment
+of the analogous Bitcoin case.
+
+\subsection{Result}
+\label{sec:rollup-eth-results}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Option & Calldata & Ethereum & Rootstock & Arbitrum \\
+\midrule
+A. SSTORE, persistent      & $P$  & $706.625$ & $641$            & $706.625$ \\
+B. Keccak tree, discarded  & $P$  & $40$      & $17.3$--$18.4$   & $17.3$--$18.4$ \\
+C. FlatMerkle, off-chain   & $2P$ & $80$      & $32.75$--$43.5$  & $32.75$--$34.1$ \\
+D. FlatMerkle, on-chain    & $P$  & $40$      & $\approx\!27.5$  & $16.2$--$18.1$ \\
+\bottomrule
+\end{tabular}
+\caption{Total transaction gas per original byte $P$ (asymptotic),
+current protocol constants on three chains, derived in
+Appendix~\ref{app:eth-da}. Ethereum: EIP-7623 calldata floor and EIP-2929
+warm-call discount both present (floor dominates). Rootstock: neither.
+Arbitrum: EIP-2929 discount, no EIP-7623 floor -- the one combination
+where D is not a clear loser against B.}
+\label{tab:eth-da-costs}
+\end{table}
+
+The three chains disagree with each other, and the disagreement is the
+result. On Ethereum, option D does not beat option B: they tie, both at
+the EIP-7623 floor, which is indifferent to a more than tenfold spread in
+the two options' real hashing cost. On Rootstock, option D loses to
+option B by a real margin ($\approx\!27.5$ against
+$\approx\!17.3$--$18.4$ gas/byte): with no floor to hide behind, raw
+efficiency matters again, and Rootstock's missing warm-call discount
+taxes option D's many separate BLAKE2F calls more than it costs option
+B's zero calls. On Arbitrum -- no floor, but \emph{with} the warm-call
+discount -- option D is, for the first time, at least competitive with
+option B and plausibly a little cheaper, though not decisively so given
+the uncertainty in our own ``glue code'' estimate (Appendix~\ref{app:eth-da}).
+So the premise this section started from -- that FlatMerkle built inside
+the contract should be strictly cheaper than a plain Merkle tree -- is
+only borne out, and only weakly, on the one chain of the three that
+combines both relevant protocol properties (a missing calldata floor and
+a present warm-call discount); it does not hold in general, and which of
+B or D wins is a fact about a given chain's own protocol rules, not about
+FlatMerkle or about ``the EVM'' as a single target. FlatMerkle-in-contract
+is, however, a large and consistent improvement over building the
+structured file off-chain (option C) and over persisting the raw data in
+storage (option A) on all three chains -- roughly $1.5$--$2\times$
+cheaper than C and well over an order of magnitude cheaper than A
+throughout, for reasons and with a fuller discussion of what this
+does and does not establish given in Appendix~\ref{app:eth-da}.
+Ethereum's pending Glamsterdam fork, as currently drafted, would raise the
+calldata floor to $64$ gas per byte; that raises the Ethereum column for
+B, C and D to $64$, $128$ and $64$ but leaves the ranking unchanged
+(Appendix~\ref{app:eth-da}).

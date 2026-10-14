@@ -1,0 +1,253 @@
+\section{Batched multi-element inclusion proofs}
+\label{sec:multiproof}
+
+When proving inclusion of $m > 1$ target indices at once, independent
+single-element proofs waste space: two targets whose recursion paths share
+a common ancestor block need only reveal that shared checkpoint once, not
+once per proof -- exactly the same idea used by Merkle multiproofs.
+
+\subsection{Construction}
+
+\textsc{BuildMultiProof} runs the same recursive traversal as
+\textsc{BuildProof} (Section~\ref{sec:algorithm}), but over the set of all
+target pairs simultaneously: at each level, a block is only recursed into
+if it contains at least one target; a sibling block is only revealed (as
+$\mathrm{ending}$ or $\mathrm{prewrap}$, exactly as before) if it contains
+\emph{no} target -- if both children contain targets, both are walked and
+no reveal is needed at that level at all. The verifier's
+\textsc{EvalMultiBlock} mirrors this exactly, computing each shared value
+once for every target whose path passes through it.
+Algorithms~\ref{alg:build-multi}--\ref{alg:verify-multi} give all three
+procedures; they correspond line by line to \texttt{build\_multiproof}
+and \texttt{verify\_multiproof} in the reference implementation.
+Throughout, $P$ is the set of distinct target \emph{pair starts}, and for
+a set $S$ of pair starts inside $\mathrm{block}(a,k)$ we write $S_L = \{s
+\in S : s < a + 2^{k-1}\}$ and $S_R = S \setminus S_L$.
+
+\begin{algorithm}[H]
+\caption{$\textsc{BuildMultiProof}(T)$ -- prover}
+\label{alg:build-multi}
+\begin{lstlisting}[style=pseudo]
+P := { t - (t mod 2) : t in T }                 # distinct pair starts
+function MRecurse(a, k, S):        # S: non-empty, pair starts in block(a,k)
+    if k = 1: return               # base pair always sent raw
+    h := 2^(k-1)
+    if S_L and S_R both non-empty:
+        MRecurse(a, k-1, S_L)
+        MRecurse(a+h, k-1, S_R)    # no reveal at this level
+    else if S_R is empty:
+        MRecurse(a, k-1, S_L)
+        reveal prewrap(a+h, k-1)   # right sibling, as in BuildProof
+    else:
+        reveal ending(a, k-1)      # left sibling, as in BuildProof
+        MRecurse(a+h, k-1, S_R)
+
+h_top := 2^(L-1);  P_L := {s in P : s < h_top};  P_R := P \ P_L
+if P_L and P_R both non-empty:
+    MRecurse(0, L-1, P_L);  MRecurse(h_top, L-1, P_R)
+else if P_R is empty:
+    MRecurse(0, L-1, P_L);  reveal prewrap(h_top, L-1)
+else:
+    reveal ending(0, L-1);  MRecurse(h_top, L-1, P_R)
+return ({ s -> (D[s], D[s+1]) : s in P }, reveals in the order emitted)
+\end{lstlisting}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{$\textsc{EvalMultiBlock}(a, k, S, \mathit{ckpt})$ -- verifier}
+\label{alg:eval-multi}
+\begin{lstlisting}[style=pseudo]
+function EvalMultiBlock(a, k, S, ckpt):
+    if k = 1:                                 # here S = {a}
+        (d0, d1) := pairs[a]
+        return C(C(C(ckpt, d0), d1), pad_b(ckpt))
+    h := 2^(k-1)
+    if S_L and S_R both non-empty:
+        left_end  := EvalMultiBlock(a, k-1, S_L, ckpt)
+        right_end := EvalMultiBlock(a+h, k-1, S_R, left_end)
+                          # right child seeded with the COMPUTED left_end
+    else if S_R is empty:
+        left_end    := EvalMultiBlock(a, k-1, S_L, ckpt)
+        sib_prewrap := read next reveal       # reject if queue empty
+        right_end   := C(sib_prewrap, pad_b(left_end))
+    else:
+        left_end  := read next reveal         # reject if queue empty
+        right_end := EvalMultiBlock(a+h, k-1, S_R, left_end)
+    return C(right_end, pad_b(ckpt))
+\end{lstlisting}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{$\textsc{VerifyMultiProof}(N, \Delta, \{\mathit{data}_t\}_{t \in T}, \pi)$ -- top-level verifier}
+\label{alg:verify-multi}
+\begin{lstlisting}[style=pseudo]
+if N < 4 or N is not a power of two: return false
+if T is empty or any t in T is outside [0, N): return false
+(pairs, reveals) := pi                 # reveals: shared FIFO queue
+P := { t - (t mod 2) : t in T }        # derived from the verifier's OWN T,
+                                       # never from pi (the a0 rule, Sec. 3)
+if keys(pairs) != P: return false      # exactly one pair per pair start
+for t in T:
+    (d0, d1) := pairs[t - (t mod 2)]
+    if t is even: expected := d0 else: expected := d1
+    if data_t != expected: return false
+h_top := 2^(L-1);  P_L := {s in P : s < h_top};  P_R := P \ P_L
+if P_L and P_R both non-empty:
+    y := EvalMultiBlock(0, L-1, P_L, IV)
+    raw_state := EvalMultiBlock(h_top, L-1, P_R, y)
+else if P_R is empty:
+    y := EvalMultiBlock(0, L-1, P_L, IV)
+    sib_prewrap := read next reveal    # reject if queue empty
+    raw_state := C(sib_prewrap, pad_b(y))
+else:
+    r := read next reveal              # reject if queue empty
+    raw_state := EvalMultiBlock(h_top, L-1, P_R, r)
+if reveals is not empty: return false  # leftover reveals: malformed
+return finalize(raw_state, N) = Delta
+\end{lstlisting}
+\end{algorithm}
+
+Deriving $P$ from the verifier's own $T$, and requiring the proof's pair
+set to equal it exactly, is the multi-target form of the rule
+Remark~\ref{rem:a0-bug} establishes for single proofs: the recursion never
+looks at a pair's low bit, so a verifier that took pair starts, or the
+assignment of indices to pair elements, from the proof could be fooled by
+the same relabeling.
+
+\subsection{Soundness}
+\label{sec:multiproof-soundness}
+
+\textsc{EvalMultiBlock} (Algorithm~\ref{alg:eval-multi}) is a new
+verifier composition, not a parameter change to \textsc{EvalBlock}, and
+this paper already flags one soundness pitfall that a superficially
+similar-looking verifier design invites (Remark~\ref{rem:prewrap-bug}), so
+it needs its own argument rather than an appeal to
+Section~\ref{sec:security} by analogy alone.
+
+\begin{lemma}[Multiproof soundness reduces to single-element soundness]
+\label{lem:multiproof-soundness}
+Fix a genuine digest $\Delta$ committing to a \emph{canonically built} file
+(the same scope Theorem~\ref{thm:soundness} requires). Under
+Assumptions~\ref{ass:freestart} and~\ref{ass:mdaccess}, no adversary can
+produce a target set $T$, values $\{\mathit{data}_t\}_{t \in T}$, and a
+multiproof $\pi$ accepted by \textsc{VerifyMultiProof} against $\Delta$,
+with $\mathit{data}_t \ne D[t]$ for some $t \in T$, without also producing
+a free-start collision in $\C$.
+\end{lemma}
+
+\begin{proof}
+Fix any $t \in T$ with $\mathit{data}_t \ne D[t]$, and let $a_0 = t - (t
+\bmod 2)$. Run \textsc{VerifyMultiProof} on $\pi$ and record every
+intermediate value. From this record we extract an ordinary
+single-element proof $\pi_t = (d_0, d_1, \mathit{reveals}_t)$ for index
+$t$: $(d_0,d_1) = \mathit{pairs}[a_0]$, and $\mathit{reveals}_t$ is built
+by walking $t$'s own root-to-leaf path in \textsc{BuildProof} order,
+taking at each level (the top-level split included) the value that
+\textsc{EvalBlock} would read there:
+\begin{itemize}
+\item If $t$'s sibling at that level contains no other target pair, $\pi$
+  revealed it explicitly, at the same point of the same fold; copy that
+  reveal.
+\item If the sibling is the \emph{left} child and contains targets,
+  \textsc{EvalMultiBlock} computed its value $\mathit{left\_end}$
+  recursively and seeded $t$'s child with it; use that computed value as
+  the reveal \textsc{EvalBlock} reads in its right branch.
+\item If the sibling is the \emph{right} child and contains targets,
+  \textsc{EvalMultiBlock} computed
+  $\mathit{right\_end} = \textsc{EvalMultiBlock}(a{+}h, k{-}1, S_R,
+  \mathit{left\_end})$, whose last step is the call $\C(x,
+  \mathrm{pad}_b(\mathit{left\_end}))$; use the pre-closing state $x$ as
+  the $\mathit{sib\_prewrap}$ reveal. \textsc{EvalBlock} then performs the
+  same call, $\C(x, \mathrm{pad}_b(\mathit{left\_end}))$, with the same
+  inputs.
+\end{itemize}
+By induction on block size along $t$'s path, \textsc{EvalBlock} on
+$\pi_t$ performs exactly the compression calls \textsc{EvalMultiBlock}
+performs along that path, with identical inputs: the base case uses the
+same $(\mathit{ckpt}, d_0, d_1)$, and each level up combines the same
+target-side value with the same sibling-side value through the same
+Equations~\eqref{eq:foldin}--\eqref{eq:own-close}. Both therefore reach
+the same raw chain state and the same $\Delta$, and \textsc{Verify}
+selects $\mathit{data}_t$ from $(d_0,d_1)$ by the same parity of $t$ that
+\textsc{VerifyMultiProof} already checked. So \textsc{Verify} accepts
+$(t, \mathit{data}_t, \pi_t)$ with $\mathit{data}_t \ne D[t]$, and
+Theorem~\ref{thm:soundness} supplies a free-start collision. The
+extraction costs $O(\log N)$ beyond the multiproof verification itself.
+\end{proof}
+
+\begin{remark}[Scope: this is soundness against physical data, not binding]
+\label{rem:multiproof-scope}
+Lemma~\ref{lem:multiproof-soundness}'s conclusion is tied to the
+\emph{true, physical} $D[t]$, exactly as Theorem~\ref{thm:soundness}'s is
+-- and, exactly as with the single-element case, this does \emph{not}
+extend to a possibly non-canonical file. The extraction above still goes
+through unchanged for an arbitrary (possibly non-canonical) $\Delta'$: it
+only relies on $\pi$ and the honestly-extracted $\pi_t$ reaching the same
+$\Delta'$, not on $\Delta'$ committing to a canonical file. What that
+weaker setting yields is the multi-target analog of
+Theorem~\ref{thm:binding} (\emph{binding}, not soundness against physical
+data): for a fixed target set $T$ and digest $\Delta'$, at most one tuple
+$\{\mathit{data}_t\}_{t\in T}$ is accepted by \textsc{VerifyMultiProof},
+regardless of whether $\Delta'$ commits to a canonical file -- since two
+distinct accepted tuples would disagree at some $t \in T$, extract to two
+distinct accepted single-element proofs for that $t$, and
+Theorem~\ref{thm:binding} already rules that out. It does \emph{not}
+follow that an accepted $\mathit{data}_t$ equals the bytes physically
+present at $\mathrm{position}(t)$ in a non-canonical $\Delta'$ --
+Remark~\ref{rem:layout-forgery} is a standing counterexample to exactly
+that stronger claim, and nothing about batching several targets together
+repairs it.
+\end{remark}
+
+This reduction is why \textsc{EvalMultiBlock}'s two-case rule (reveal
+directly vs.\ recurse) needs to be exactly the single-proof rule applied
+independently to each shared block, with no shortcut that lets a
+multi-target block reuse a value \emph{without} recomputing or revealing it
+per level -- precisely the discipline the insecure alternative of
+Remark~\ref{rem:prewrap-bug} violates in the single-target case, and the
+same tamper-rejection discipline was applied to
+the multiproof implementation as well -- tampering the target data, the
+claimed data, one shared or individual reveal per trial, relabeling a
+claim to the other index of its pair, and adding an extra unclaimed pair,
+across many randomized target sets (Section~\ref{sec:intro}), with every
+tamper correctly rejected.
+
+\subsection{Measured savings}
+
+We measured average multiproof size (over 12 random trials per row) against
+$m$ independent single-element proofs, for $m$ uniformly random distinct
+target indices, at several scales.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+$N$ & $m$ & Independent (B) & Multiproof (B) & Saved \\
+\midrule
+$2^{10}$ & 2  &   704.0 &   597.3 & 15.2\% \\
+$2^{10}$ & 8  &  2816.0 &  1845.3 & 34.5\% \\
+$2^{10}$ & 32 & 11264.0 &  5306.7 & 52.9\% \\
+$2^{10}$ & 64 & 22528.0 &  8645.3 & 61.6\% \\
+\midrule
+$2^{14}$ & 2  &   960.0 &   874.7 &  8.9\% \\
+$2^{14}$ & 8  &  3840.0 &  2816.0 & 26.7\% \\
+$2^{14}$ & 32 & 15360.0 &  9434.7 & 38.6\% \\
+$2^{14}$ & 64 & 30720.0 & 16634.7 & 45.9\% \\
+\midrule
+$2^{18}$ & 2  &  1216.0 &  1120.0 &  7.9\% \\
+$2^{18}$ & 8  &  4864.0 &  3896.0 & 19.9\% \\
+$2^{18}$ & 32 & 19456.0 & 13509.3 & 30.6\% \\
+$2^{18}$ & 64 & 38912.0 & 24965.3 & 35.8\% \\
+\midrule
+$2^{20}$ & 2  &  1344.0 &  1232.0 &  8.3\% \\
+$2^{20}$ & 8  &  5376.0 &  4418.7 & 17.8\% \\
+$2^{20}$ & 32 & 21504.0 & 15450.7 & 28.1\% \\
+$2^{20}$ & 64 & 43008.0 & 28853.3 & 32.9\% \\
+\bottomrule
+\end{tabular}
+\caption{Multiproof space savings for uniformly random target sets, $D=W=32$
+bytes. Savings grow with $m$ (more sharing opportunities) and shrink with
+$N$ (a fixed $m$ becomes a sparser sample of a larger tree, so paths share
+fewer ancestors), ranging from 7.9\% to 61.6\% across the scales tested.}
+\label{tab:multiproof-savings}
+\end{table}

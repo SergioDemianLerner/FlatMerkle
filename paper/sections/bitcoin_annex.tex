@@ -1,0 +1,351 @@
+\section{Application: committing data in a Bitcoin transaction annex}
+\label{sec:bitcoin-annex}
+
+\subsection{Why this needs a flat hash, not a tree}
+
+BIP-341 \citep{bip341} defines an optional \emph{annex} field in a Taproot
+witness stack: any item present when other conditions are met is treated as
+annex data, and its commitment inside the transaction's signature hash is
+\begin{equation}
+\mathrm{sha\_annex} = \mathrm{SHA256}\big(\mathrm{compact\_size}(\mathrm{len}(\mathrm{annex})) \,\Vert\, \mathrm{annex}\big),
+\end{equation}
+a single, ordinary, untagged SHA-256 of the length-prefixed annex bytes --
+consensus never computes anything tree-shaped over annex content. This is
+precisely the setting motivating this paper: if the annex bytes are the
+FlatMerkle structured file of Section~\ref{sec:construction} (with the
+short compact-size preamble accounted for), then $\mathrm{sha\_annex}$ --
+already computed by every consensus-validating node, with zero protocol
+changes -- \emph{is} the FlatMerkle digest, and anyone holding the annex
+can produce $O(\log N)$ inclusion proofs for any element it contains,
+verifiable by anyone who has $\mathrm{sha\_annex}$ (Section~\ref{sec:annex-buys}
+below explains why this is \emph{not} the same thing as the transaction's
+final signature hash, and what a verifier actually needs).
+
+\subsection{What this buys}
+\label{sec:annex-buys}
+
+\begin{itemize}
+\item A timestamped, immutable commitment to structured application data,
+  inheriting Bitcoin's ordering and immutability guarantees, at the cost of
+  ordinary transaction fees for the annex bytes.
+\item $O(\log N)$ inclusion proofs verifiable by any third party who holds
+  $\mathrm{sha\_annex}$ (a public 32-byte value, obtainable from any node
+  that has validated the transaction, or supplied directly alongside the
+  proof) and a short proof -- no need to download or re-hash the whole
+  annex. How a lightweight verifier obtains an \emph{authenticated}
+  $\mathrm{sha\_annex}$ for the confirmed transaction is a separate
+  problem, with a real cost trade-off
+  (Section~\ref{sec:annex-authentication}).
+  $\mathrm{sha\_annex}$ itself is \emph{not} the same object as the
+  transaction's final Taproot signature hash: it is one 32-byte component
+  folded into the larger \texttt{SigMsg} that the signature hash is
+  computed over, not recoverable from the signature hash alone (that would
+  require inverting a hash function). A verifier who has only the final
+  signature digest, with no other data, cannot check a FlatMerkle proof
+  against it directly; what must actually be transmitted alongside the
+  proof is $\mathrm{sha\_annex}$ itself.
+\item By Theorem~\ref{thm:binding}, a given $\mathrm{sha\_annex}$ value
+  cannot be made to accept two different, conflicting values for the same
+  index: an accepting proof pins down a unique answer. This does
+  \emph{not} mean a publisher gains nothing from an annex that deviates
+  from the canonical layout -- Remark~\ref{rem:layout-forgery} exhibits a
+  real forgery against exactly that stronger claim -- so a third party who
+  merely downloads the annex, hashes it, and assumes every accepting proof
+  describes bytes it can literally see at the corresponding offset is
+  \emph{not} safe. What is safe: any party willing to hold the full annex
+  can run \textsc{ScanForViolations} once ($O(N)$) and, if the annex is
+  non-canonical, publish an $O(\log N)$ fraud proof
+  (Section~\ref{sec:fraud-proofs}) that any lightweight verifier -- with
+  only $\mathrm{sha\_annex}$ -- can check without downloading the annex at
+  all.
+\end{itemize}
+
+\subsection{Alternatives within a linearly hashed annex}
+\label{sec:annex-alternatives}
+
+Under the threat model of Section~\ref{sec:intro}, a design must give an
+opponent $O(\log N)$ proofs both of inclusion and of malformation. Three
+natural alternatives to FlatMerkle meet the size goal but not both proof
+goals (Table~\ref{tab:annex-alternatives}).
+
+\emph{Merkle root as a trailer.} Lay the annex out as $\texttt{0x50}$
+header, data, then a 32-byte Merkle root $\rho$ of the data, positioned
+so that $\rho \Vert \texttt{0x80} \Vert 0^{*} \Vert \mathrm{len}$ fills
+the final SHA-256 block. Given the 32-byte midstate $s$ entering that
+block, a verifier checks $\mathrm{sha\_annex} = \C(s, \rho \Vert
+\mathit{pad})$ with one call -- binding $\rho$ under
+Assumption~\ref{ass:freestart}, the same assumption FlatMerkle uses -- and
+then an ordinary Merkle path against $\rho$. Overhead is about 96 bytes,
+and inclusion proofs are only 32 bytes longer than a plain Merkle proof.
+But a malicious committer can publish $\rho = \mathrm{Merkle}(D')$, where
+$D'$ equals the published data except at position $0$. Every inclusion
+proof then certifies $D'[0]$, not the published $D[0]$, and exposing this
+requires proving the bytes physically at position $0$ of the annex: a
+verifier must recompute the linear chain from there to the final block,
+$\Theta(N)$ compression calls. (We confirmed the one-call opening against
+the reference SHA-256 implementation.)
+
+\emph{A fully serialized Merkle tree.} Publishing every internal node in
+the annex, as well as the root, has the same weakness: an inconsistent
+node can be placed early in the stream, and proving the physical content
+of any position in a linear hash costs $\Theta(N)$ without re-injected
+states.
+
+\emph{Root trailer plus an interactive bisection game.} The $\Theta(N)$
+malformation check can be turned into $O(\log N)$ rounds of an
+interactive game: the committer posts intermediate chain states, the
+opponent bisects to a single disputed compression call, and a dispute
+mechanism such as BitVMX \citep{lerner2024bitvmx} adjudicates it. This
+reaches logarithmic cost per round, but needs $O(\log N)$ on-chain rounds,
+the committer's participation, and timeouts to handle a committer who
+stops responding. FlatMerkle's fraud proofs (Section~\ref{sec:fraud-proofs})
+are a single, non-interactive message that anyone holding the annex can
+publish.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Design & Annex size & Inclusion & Malformation & Interactive \\
+\midrule
+Root trailer            & $P + O(1)$ & $O(\log N)$ & $\Theta(N)$ & no \\
+Serialized Merkle tree  & $\approx 2P$ & $O(\log N)$ & $\Theta(N)$ & no \\
+Root trailer + bisection & $P + O(1)$ & $O(\log N)$ & $O(\log N)$ per round$^{*}$ & yes \\
+FlatMerkle              & $\approx 2P$ & $O(\log N)$ & $O(\log N)$ & no \\
+\bottomrule
+\end{tabular}
+\caption{Committing $P$ bytes ($N$ elements) inside a linearly hashed
+annex. ``Inclusion'' and ``Malformation'' give the size of a proof an
+opponent can produce and the verifier's work to check it. FlatMerkle
+pays roughly $2\times$ in size for non-interactive logarithmic proofs of
+both kinds. $^{*}$Over $O(\log N)$ interactive rounds.}
+\label{tab:annex-alternatives}
+\end{table}
+
+\subsection{What FlatMerkle verification does \emph{not} give you: binding \texorpdfstring{$\mathrm{sha\_annex}$}{sha\_annex} to a specific transaction}
+\label{sec:annex-authentication}
+
+Everything above is about \emph{FlatMerkle verification}: given a claimed
+$\mathrm{sha\_annex}$ value and a short proof, confirming a specific
+element sits at a specific index within the annex that hashes to it. That
+is a completely separate question from \emph{Bitcoin authentication}: given
+a claimed $\mathrm{sha\_annex}$ value and a specific transaction instance,
+confirming that value genuinely is that instance's annex hash, and not an
+arbitrary 32 bytes an adversary invented and handed to a lightweight
+verifier alongside an otherwise-valid-looking FlatMerkle proof.
+FlatMerkle's binding guarantee (Theorem~\ref{thm:binding}) says nothing
+about this: it is a statement about the relationship between a digest and
+the proofs it accepts, not about how a verifier learns which digest
+belongs to which transaction. A verifier who accepts \emph{any} 32 bytes as
+``the'' $\mathrm{sha\_annex}$ for a given transaction, with no further
+check, can be handed a proof for a completely different, adversary-chosen
+annex and never know the difference.
+
+A subtlety in identifying ``a given transaction'' at all: the annex is
+\emph{witness} data, and a transaction's \texttt{txid} -- unlike its
+\texttt{wtxid} -- is computed over the non-witness serialization only
+(BIP-141). Two witness variants of the same underlying transaction can
+therefore share an identical \texttt{txid} while carrying different
+annexes, different Taproot signatures, and different \texttt{wtxid}s; only
+one variant is ever mined, but a party who knows merely a \texttt{txid} has
+no way to tell, from the \texttt{txid} alone, which witness/annex instance
+that was. So a specific transaction must be identified by its
+\texttt{wtxid}, or by some other authenticated source of the confirmed
+witness -- a bare \texttt{txid} is not enough to pin down which annex is
+even being talked about.
+
+Closing the authentication gap itself decomposes into two separate
+sub-properties, since a candidate $\mathrm{sha\_annex}$ and a signature
+alone establish only the first:
+\begin{enumerate}
+\item \emph{candidate $\mathrm{sha\_annex} \to$ a validly signed witness
+  variant} -- some witness instance exists for which this
+  $\mathrm{sha\_annex}$, this signature, and these transaction/spent-output
+  fields are mutually consistent;
+\item \emph{that witness variant $\to$ actually confirmed on-chain} -- this
+  specific witness instance, not some other validly-signed alternative the
+  same signer could equally have produced, is the one Bitcoin's consensus
+  actually accepted.
+\end{enumerate}
+Three candidate mechanisms, addressing these to different degrees:
+\begin{itemize}
+\item \textbf{Reconstruct $\mathit{SigMsg}$ and check the signature.}
+  $\mathrm{sha\_annex}$ is one field embedded inside the larger
+  $\mathit{SigMsg}$ that BIP-341's Taproot key-path signature is computed
+  over (together with, among other fields, $\mathrm{sha\_prevouts}$,
+  $\mathrm{sha\_amounts}$, $\mathrm{sha\_scriptpubkeys}$,
+  $\mathrm{sha\_sequences}$, $\mathrm{sha\_outputs}$, and
+  $\mathit{input\_index}$) -- it is \emph{not} independently serialized or
+  recoverable from the final signature hash alone. A verifier who is given
+  the full unsigned transaction (or the specific fields $\mathit{SigMsg}$
+  needs), the spending input's Taproot public key, and its signature can
+  recompute $\mathit{SigMsg}$ -- with the claimed $\mathrm{sha\_annex}$
+  substituted in at the right position -- and check the BIP-340 Schnorr
+  signature over $\mathrm{hash_{TapSighash}}(\mathtt{0x00} \Vert
+  \mathit{SigMsg})$ directly. If it validates, the claimed
+  $\mathrm{sha\_annex}$ is, up to breaking Schnorr unforgeability, part of
+  a genuinely, validly signed witness for this transaction's inputs --
+  \emph{sub-property 1 only}. It does \emph{not}, by itself, establish
+  sub-property 2: the signature itself is witness data too, excluded from
+  \texttt{txid} the same way the annex is, so a signer holding the private
+  key can construct another equally valid signature over a different annex
+  without changing the base transaction or its \texttt{txid} at all. This
+  option proves authorization and internal consistency of a witness
+  variant, not that this particular variant is the one Bitcoin confirmed.
+\item \textbf{Trust a validating node or block explorer.} A lightweight
+  verifier can simply ask a full node (or a service that has one) ``what is
+  the annex hash for input $i$ of the transaction with this \texttt{wtxid}
+  (or this block height and position)'', the same way it might already
+  trust a block explorer for a confirmation status. Asking by
+  \texttt{wtxid} (or an equivalent witness-committing identifier) rather
+  than \texttt{txid} addresses sub-property 2 as well, at the cost of
+  reintroducing a trusted third party the rest of this construction
+  otherwise avoids.
+\item \textbf{An authenticated copy of the confirmed witness, tied to the
+  block's witness commitment.} BIP-141 commits every block's transactions'
+  \texttt{wtxid}s into the coinbase transaction. A verifier who is given
+  the witness commitment path from the claimed witness serialization up to
+  a block header they otherwise trust (e.g.\ via an SPV-style proof of
+  work) gets both sub-properties without trusting any single third party.
+  But this route is \emph{not} $O(\log N)$: a \texttt{wtxid} is a double
+  SHA-256 over the transaction's \emph{complete} serialization, witness
+  included, and therefore over the annex bytes themselves. To check that a
+  claimed $\mathrm{sha\_annex}$ belongs to the confirmed \texttt{wtxid}, the
+  verifier must recompute the \texttt{wtxid} from the full witness, i.e.\
+  hash all $\Theta(N)$ annex bytes. Nothing computed for one chain can be
+  reused for the other: $\mathrm{sha\_annex}$ and the \texttt{wtxid} are two
+  independent SHA-256 chains over the same bytes, started from different
+  states, so FlatMerkle's checkpoints for the first say nothing about the
+  second.
+\end{itemize}
+The three mechanisms therefore form a trilemma, and none of them gives a
+lightweight verifier everything at once:
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Mechanism & Confirmed variant & Trustless & Verifier cost \\
+\midrule
+Signature over $\mathit{SigMsg}$     & no  & yes & $O(1)$ \\
+Trusted node / explorer              & yes & no  & $O(1)$ \\
+Witness commitment to a header       & yes & yes & $O(N)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The first option, on its own, reduces the scheme to an ordinary digital
+signature over a commitment -- which needs no blockchain at all -- and so
+gives up the timestamping and ordering guarantees listed in
+Section~\ref{sec:annex-buys}; the second reintroduces exactly the trusted
+party the construction is meant to avoid; the third is trustless and
+confirmation-aware but costs as much as downloading the annex. Hence,
+for a purely lightweight, trustless verifier, the $O(\log N)$ cost of a
+FlatMerkle proof is the cost of checking membership \emph{given} an
+authenticated $\mathrm{sha\_annex}$, not the end-to-end cost of learning
+what Bitcoin confirmed. The $O(N)$ authentication step can be done once
+per annex by any party and amortized across many proofs only if verifiers
+are willing to trust that party's result, which is the second option
+again. Settings with their own accountability structure can avoid the
+trilemma: in the rollup of Section~\ref{sec:rollup-da}, sub-property~1 is
+sufficient for the dispute itself, as explained there. None of these
+mechanisms is implemented or benchmarked in this paper; a deployment needs
+to pick one explicitly rather than assume FlatMerkle's own guarantees
+cover it.
+
+\subsection{Block alignment}
+\label{sec:annex-alignment}
+
+$\mathrm{sha\_annex} = \mathrm{SHA256}(\mathrm{compact\_size}(\mathrm{len}(\mathrm{annex})) \,\Vert\, \mathrm{annex})$
+prepends a length preamble whose own size, $p \in \{1,3,5,9\}$ bytes,
+depends on $\mathrm{len}(\mathrm{annex})$ (BIP-341's \texttt{CompactSize}
+encoding). Since $p$ is essentially never a multiple of 64, treating this
+as a simple byte-offset adjustment is not sufficient: unless corrected,
+every 64-byte FlatMerkle item (Section~\ref{sec:construction}) straddles
+two real SHA-256 compression-block boundaries, so no single item
+corresponds to one
+call of $\C$ at all, breaking the correspondence the whole construction
+relies on. The fix is a small, fixed \emph{alignment header} of
+$h = (64 - p) \bmod 64$ bytes -- since $p \in \{1,3,5,9\}$ is never a
+multiple of 64, $h$ is always one of $\{63,61,59,55\}$, fixed once $p$ is
+known (e.g.\ $h=59$ for the common case $p=5$) -- placed immediately after
+the compact-size preamble and before the FlatMerkle structured file
+proper, so that $p + h \equiv 0 \pmod{64}$: exactly one real SHA-256
+compression block. Unlike an ordinary alignment padding scheme, this
+header's content is \emph{not} free: BIP-341 recognizes a witness item as
+an annex at all only if the annex's own first byte is \texttt{0x50}, so
+the header's first byte is fixed to \texttt{0x50}. The remaining $h-1$
+bytes carry no alignment requirement of their own -- padding \emph{length},
+not content, is what restores block-alignment -- but this paper fixes them
+canonically rather than leaving them to individual deployments: they
+\texttt{SHALL} be all-zero bytes. Any other fixed convention (e.g.\ a magic
+tag identifying the annex as a FlatMerkle structured file) would work
+equally well for alignment, but leaving this genuinely a per-deployment
+choice would mean two conforming FlatMerkle-in-annex implementations could
+disagree on $\mathrm{effective}~\CK[0]$ for the byte-identical annex,
+breaking interoperability; fixing it here removes that ambiguity.
+
+With this header in place, define the \emph{effective} checkpoint
+$\CK[0]$ (in place of the raw $\mathrm{IV}$, Section~\ref{sec:construction})
+as the real SHA-256 chain state \emph{after} processing that one
+preamble-plus-header block, starting from the ordinary $\mathrm{IV}$: every
+FlatMerkle item from $D[0]$ onward then begins exactly on a genuine
+64-byte compression-block boundary within the annex's own SHA-256
+computation, and $\mathrm{position}(\cdot)$ (Lemma~\ref{lem:position})
+converts directly to a byte offset by multiplying by 64 and adding
+$p + h$, with no further adjustment needed. (A degenerate edge case is
+worth flagging, not solving here: if $\mathrm{len}(\mathrm{annex})$ sits
+exactly at one of the three \texttt{CompactSize} length thresholds -- 253,
+65536, or $2^{32} = 4294967296$ bytes, where $p$ transitions from 1 to 3,
+3 to 5, or 5 to 9 bytes respectively -- adding the header itself could
+change $p$ and hence $h$; a real implementation should compute $p$ from
+the \emph{final} annex length, header included, not iterate.)
+
+Changing the starting chaining state alone is not enough to make this a
+correct SHA-256 computation, however: SHA-256's finalization encodes the
+\emph{total} number of bits processed from the true, original
+$\mathrm{IV}$ -- not from whatever effective checkpoint a particular
+application chooses to resume from. Standalone FlatMerkle's
+$\mathrm{finalize}(\mathit{raw\_state}, N)$ (Algorithm~3.3) implicitly
+assumes the entire hashed message is the $M = 2N-2$ structured-file items
+themselves, $64M$ bytes total. In the annex, one additional real SHA-256
+block -- the compact-size-preamble-plus-header block derived above -- was
+hashed \emph{before} $\mathrm{effective}~\CK[0]$, so the true total message
+length is $64(M+1)$ bytes, not $64M$: using the standalone
+$\mathrm{finalize}(\cdot, N)$ unmodified would encode the wrong length and
+simply fail to reproduce the real $\mathrm{sha\_annex}$, independent of
+anything else being correct. The fix is to use an annex-specific
+finalization that takes the extra prefix block count explicitly,
+\begin{equation}
+\mathrm{finalize\_annex}(\mathit{raw\_state}, N) := \mathrm{finalize}_{\,64(M+1)}(\mathit{raw\_state})
+\end{equation}
+where $\mathrm{finalize}_{\,L}(\cdot)$ denotes SHA-256's ordinary
+length-suffix finalization parameterized directly by the true total byte
+count $L$ (rather than inferring it solely from $N$), and
+Algorithm~3.3's $\mathrm{Verify}$ must be instantiated with
+$\mathrm{finalize\_annex}$, not the standalone $\mathrm{finalize}$, when
+checking a proof against $\mathrm{sha\_annex}$.
+
+\subsection{Caveats}
+
+\begin{itemize}
+\item \textbf{Relay and standardness policy.} As of this writing, annex
+  data is consensus-valid but not relayed or mined by default nodes;
+  alternative relay policies (e.g.\ Libre Relay, which relays annex-bearing
+  transactions under a specific marker convention) exist but are not
+  universal. Reliance on this application should account for the relay
+  policy landscape at deployment time, which may change.
+\item \textbf{Future consensus use of the annex.} BIP-341 currently defines
+  the annex only as a reserved field for future extensions, and its own
+  text is explicit and severe about this: ``[u]ntil the meaning of this
+  field is defined by another softfork, users SHOULD NOT include annex in
+  transactions, or it may lead to PERMANENT FUND LOSS'' \citep{bip341}.
+  This is not a hypothetical or minor concern -- it is BIP-341's own
+  strongest warning language, aimed at exactly this kind of use. It carries
+  no consensus meaning today beyond being committed to via
+  $\mathrm{sha\_annex}$, but a future soft fork could assign consensus-level
+  semantics to some or all annex content (for instance, reserving a
+  specific prefix byte or sub-format) that conflicts with using raw annex
+  bytes for arbitrary application data as described here, in a way that
+  could render funds in outputs spent through such a transaction
+  unspendable. Anyone deploying this application should treat that risk as
+  live, not theoretical, and track proposals that touch the annex field
+  before relying on it.
+\end{itemize}

@@ -1,0 +1,476 @@
+\section{Inclusion proof: construction and verification}
+\label{sec:algorithm}
+
+\subsection{Two kinds of revealed value}
+
+Besides the target pair's two raw data elements, every proof step reveals
+exactly one 32-byte (in general, $w$-bit) state value per level of
+recursion. Before saying what each reveal means, we need two pieces of
+notation: the two snapshots of the running hash-chain state taken while a
+block is built, and the notion of a \emph{sibling}.
+
+\begin{definition}[Prewrap and ending]
+\label{def:prewrap-ending}
+Building $\mathrm{block}(a,k)$ (Section~\ref{sec:construction}) is a
+prefix of the single, ongoing compression-chain computation for the whole
+file, and it ends with one specific compression call: the one that applies
+the block's own closing checkpoint re-injection, $\mathrm{MID}(a)$. Write
+\[
+\mathrm{prewrap}(a,k) = \text{the running state \emph{immediately before}
+that final call,}
+\]
+i.e.\ right after every element and every nested $\mathrm{MID}$ belonging to
+$\mathrm{block}(a,k)$ \emph{other than its own closing one} has been hashed,
+and write
+\[
+\mathrm{ending}(a,k) = \C\big(\mathrm{prewrap}(a,k),\ \mathrm{MID}(a)\big)
+\]
+for the state \emph{immediately after} that call. Both are snapshots of the
+same single running state used to build the whole file -- they are not
+separately computed side channels -- taken one compression call apart, on
+either side of $\mathrm{block}(a,k)$'s own closing step. (A checkpoint
+$\CK[a']$ for $a' \ne 0$, Section~\ref{sec:construction}, is always equal
+to $\mathrm{ending}(a,k)$ for whichever block happens to finish immediately
+before position $a'$ begins; the one exception is $\CK[0] = \mathrm{IV}$,
+which is not any block's $\mathrm{ending}$.)
+\end{definition}
+
+\paragraph{The generic step.} Before a concrete example, here is the same
+pattern once, abstractly, for a single call $\mathrm{block}(a,k)$ with
+$k \ge 2$. Every line below is one of exactly two kinds, and the rule is
+about the \emph{word}, not the font: a line that says \textbf{emit} writes
+bytes to the file and feeds them into the hash chain; every other line
+merely \emph{names} a value the running state already has, and writes
+nothing. (\emph{Execute} is a third thing, strictly speaking -- a recursive
+call that itself expands into a sequence of exactly this same shape, one
+level down -- so it is set in plain text, neither bold nor colored.) To
+make the two real kinds easy to tell apart at a glance even where the
+line is mostly math, \emph{emit} lines are \textbf{bold black}, and every
+value-naming line is \snap{shown in gray}:
+
+\begin{enumerate}[itemsep=1pt, parsep=0pt, topsep=4pt]
+\item \snap{if not already set: $\CK[a] := $ state}
+\item execute $\mathrm{block}(a,\, k{-}1)$
+\item execute $\mathrm{block}(a + 2^{k-1},\, k{-}1)$
+\item \snap{$\mathrm{prewrap}(a,k) := $ state}
+\item \textbf{emit $\mathrm{MID}(a)$}
+\item \snap{$\mathrm{ending}(a,k) := $ state}
+\end{enumerate}
+
+The base case $k=1$ is the same six steps with two data emissions,
+\textbf{emit $D[a]$} and \textbf{emit $D[a{+}1]$}, standing in for the two
+recursive calls (steps 2--3). Every call to $\mathrm{block}(\cdot,\cdot)$
+made anywhere in the whole construction -- there are exactly $N-2$ of them,
+one per $\mathrm{MID}$ emission -- follows one of these two shapes.
+
+The $N=8$ example below is exactly what you get from inlining every one of
+the $N-2=6$ calls that construction makes, in the order they actually
+execute, down to the individual data elements.
+
+\paragraph{Example: the full build sequence for $N=8$.} To make
+Definition~\ref{def:prewrap-ending} concrete, here is the complete,
+real sequence of events building the structured file for a small $N=8$
+example ($D[0..7]$), exactly as produced by the reference implementation,
+using the same \textbf{bold} (emit) / \snap{gray} (value-naming only)
+convention as above:
+
+\begin{enumerate}[itemsep=1pt, parsep=0pt, topsep=4pt]
+\item \snap{$\CK[0] := \mathrm{IV}$}
+\item \textbf{emit $D[0]$}
+\item \textbf{emit $D[1]$}
+\item \snap{$\mathrm{prewrap}(0,1) :=$ state}
+\item \textbf{emit $\mathrm{MID}(0)$} \hfill (bytes $= \mathrm{pad}_b(\CK[0])$)
+\item \snap{$\mathrm{ending}(0,1) :=$ state}
+\item \snap{$\CK[2] :=$ state} \hfill ($= \mathrm{ending}(0,1)$)
+\item \textbf{emit $D[2]$}
+\item \textbf{emit $D[3]$}
+\item \snap{$\mathrm{prewrap}(2,1) :=$ state}
+\item \textbf{emit $\mathrm{MID}(2)$} \hfill (bytes $= \mathrm{pad}_b(\CK[2])$)
+\item \snap{$\mathrm{ending}(2,1) :=$ state}
+\item \snap{$\mathrm{prewrap}(0,2) :=$ state} \hfill ($= \mathrm{ending}(2,1)$)
+\item \textbf{emit $\mathrm{MID}(0)$ (again)} \hfill (bytes $=
+  \mathrm{pad}_b(\CK[0])$, same bytes as step 5)
+\item \snap{$\mathrm{ending}(0,2) :=$ state}
+\item \snap{$\CK[4] :=$ state} \hfill ($= \mathrm{ending}(0,2)$)
+\item \textbf{emit $D[4]$}
+\item \textbf{emit $D[5]$}
+\item \snap{$\mathrm{prewrap}(4,1) :=$ state}
+\item \textbf{emit $\mathrm{MID}(4)$} \hfill (bytes $= \mathrm{pad}_b(\CK[4])$)
+\item \snap{$\mathrm{ending}(4,1) :=$ state}
+\item \snap{$\CK[6] :=$ state} \hfill ($= \mathrm{ending}(4,1)$)
+\item \textbf{emit $D[6]$}
+\item \textbf{emit $D[7]$}
+\item \snap{$\mathrm{prewrap}(6,1) :=$ state}
+\item \textbf{emit $\mathrm{MID}(6)$} \hfill (bytes $= \mathrm{pad}_b(\CK[6])$)
+\item \snap{$\mathrm{ending}(6,1) :=$ state}
+\item \snap{$\mathrm{prewrap}(4,2) :=$ state} \hfill ($= \mathrm{ending}(6,1)$)
+\item \textbf{emit $\mathrm{MID}(4)$ (again)} \hfill (bytes $=
+  \mathrm{pad}_b(\CK[4])$, same bytes as step 20)
+\item \snap{$\mathrm{ending}(4,2) :=$ state} \hfill (this is the file's raw
+  chain state, before finalization)
+\end{enumerate}
+
+Two things are worth noticing. First, every \snap{gray, non-\textbf{emit}}
+line is free: it is a name for a value the running state already has at
+that point, not a separate computation and not a separate byte written
+anywhere -- Definition~\ref{def:prewrap-ending}'s
+$\mathrm{prewrap}$/$\mathrm{ending}$ pair is nothing more than \emph{before}
+and \emph{after} labels for step~5 (or step~11, or~20, or~26 -- whichever
+$\mathrm{MID}$ call is currently closing). Second, $\mathrm{MID}(0)$ is
+emitted twice (steps 5 and
+14) and $\mathrm{MID}(4)$ is emitted twice (steps 20 and 29): same
+checkpoint bytes both times, but compressed against a different running
+state each time, since the same original position can start more than one
+nested block (here $a=0$ starts both $\mathrm{block}(0,1)$ and
+$\mathrm{block}(0,2)$). This is exactly the mechanism that lets one
+checkpoint, computed once, be reused at every level whose block happens to
+start at that position -- the same reuse Definition~\ref{def:prewrap-ending}
+already alludes to for $\CK[a']$ in general. (14 emitted items total -- 8
+data, 6 $\mathrm{MID}$ -- matching $2N-2$ for $N=8$, Section~\ref{sec:construction}.)
+
+\begin{definition}[Sibling]
+\label{def:sibling}
+At recursion level $k$, block $\mathrm{block}(a,k)$ has two children,
+$\mathrm{block}(a, k-1)$ and $\mathrm{block}(a+h, k-1)$ with $h = 2^{k-1}$
+(Section~\ref{sec:construction}). The target index $t$ lies in exactly one
+of the two; call that one the \emph{target child}. The \textbf{sibling} (at
+this level) is the other child -- the one \emph{not} containing $t$.
+\end{definition}
+
+Since the sibling does not contain the target, the proof does not recurse
+into it: it reveals a single state value that stands in for the sibling's
+whole contents. Which value depends on whether the sibling was built
+before or after the target child:
+
+\begin{description}
+\item[\emph{Left sibling: becomes the new checkpoint.}] The sibling
+  $\mathrm{block}(a,k-1)$ is already closed when the target child begins.
+  Its closing state $\mathrm{ending}(a,k-1) = \CK_{a+2^{k-1}}$ is revealed
+  and used directly as the checkpoint that starts the evaluation of the
+  target child.
+\item[\emph{Right sibling: combined with the verified value.}] The sibling
+  $\mathrm{block}(a+h,k-1)$ is built after the target child. The proof
+  reveals its \emph{pre}-closing state $\mathrm{prewrap}(a+h,k-1)$, not its
+  ending, and the verifier performs the sibling's closing fold itself,
+  using $\mathit{left\_end}$, its own result for the target child, as the
+  checkpoint. Revealing $\mathrm{ending}(a+h,k-1)$ instead would make the
+  final check independent of $\mathit{left\_end}$, so any target data below
+  this level would verify (Remark~\ref{rem:prewrap-bug}). For $k-1 \ge 2$,
+  $\mathrm{prewrap}(a+h,k-1)$ is the ending of the sibling's own right child
+  and carries the label $\CK_{[a+h+2^{k-2},\,a+h+2^{k-1}-1]}$
+  (Section~\ref{sec:construction}); for $k-1=1$ it is unlabelled.
+\end{description}
+
+Concretely, the fold-in step in the second case computes
+\begin{equation}
+\C\big(\mathrm{prewrap}(a{+}h,k{-}1),\ \mathrm{pad}_b(\mathit{left\_end})\big),
+\label{eq:foldin}
+\end{equation}
+and in a genuine proof $\mathit{left\_end} = \mathrm{ending}(a,k-1) =
+\CK[a+h]$, the checkpoint that $\mathrm{block}(a+h,k-1)$'s closing
+$\mathrm{MID}(a+h)$ re-injects, so by Definition~\ref{def:prewrap-ending}
+\begin{equation}
+\C\big(\mathrm{prewrap}(a{+}h,k{-}1),\ \mathrm{pad}_b(\CK[a+h])\big)
+= \mathrm{ending}(a{+}h,k{-}1)
+\end{equation}
+exactly: the verifier recomputes the sibling's closing value from a
+checkpoint it has itself just verified.
+
+\paragraph{Closing $\mathrm{block}(a,k)$ itself.} After both children have
+been accounted for, in left-to-right order, the state is
+$v = \mathrm{prewrap}(a,k)$ in either case, and one further call closes
+$\mathrm{block}(a,k)$ with its own checkpoint $\CK[a]$, passed down from
+the level above:
+\begin{equation}
+\C\big(v,\ \mathrm{pad}_b(\CK[a])\big)
+= \C\big(\mathrm{prewrap}(a,k),\ \mathrm{MID}(a)\big)
+= \mathrm{ending}(a,k).
+\label{eq:own-close}
+\end{equation}
+This is the last line of \textsc{EvalBlock} below,
+\texttt{return C(right\_end, pad\_b(ckpt))}. Every level performs
+Equation~\eqref{eq:own-close} once, in addition to resolving the sibling.
+The two folds are easy to conflate in the pseudocode, but
+Equation~\eqref{eq:foldin} closes the \emph{sibling} with $\CK[a{+}h]$,
+while Equation~\eqref{eq:own-close} closes $\mathrm{block}(a,k)$ with
+$\CK[a]$, one level up.
+
+\subsection{Building a proof}
+
+\begin{algorithm}[H]
+\caption{$\textsc{BuildProof}(a_0, L)$ -- prover, given target pair start $a_0$}
+\begin{lstlisting}[style=pseudo]
+function Recurse(a, k, t):      # t = target index, in [a, a+2^k)
+    if k = 1: return             # base case: no reveal here,
+                                  # base pair always sent raw
+    h := 2^(k-1)
+    if t < a + h:                # target in left child
+        Recurse(a, k-1, t)
+        reveal prewrap(a+h, k-1)  # right sibling, not yet closed
+    else:                         # target in right child
+        reveal ending(a, k-1)     # left sibling, already closed
+        Recurse(a+h, k-1, t)
+
+h_top := 2^(L-1)
+if a0 < h_top:
+    Recurse(0, L-1, a0)
+    reveal prewrap(h_top, L-1)
+else:
+    reveal ending(0, L-1)
+    Recurse(h_top, L-1, a0)
+
+return (D[a0], D[a0+1], reveals in the order emitted above)
+\end{lstlisting}
+\end{algorithm}
+
+The proof carries $a_0$'s two data elements, not $a_0$ itself: the
+verifier (Algorithm~3.3 below) always has its own trusted target
+$\mathit{index}$ and derives the pair start from \emph{that}, never from
+anything the proof claims -- $a_0$ is prover-side bookkeeping used to
+build the reveal sequence, not part of the wire format.
+
+\begin{lemma}[Index-independent proof size, for fixed $N$]
+For every index $0 \le a < N = 2^L$, this procedure emits exactly $L-1$
+reveals -- the same count for every index at that $N$, not merely an
+average over indices. (Proof size is, as usual, still $O(\log N)$ in $N$
+itself; the point here is that it does not additionally vary with
+\emph{which} index is proven once $N$ is fixed.)
+\end{lemma}
+
+This follows directly from the algorithm: each of the $L-1$ recursive levels
+above the base case emits exactly one reveal, regardless of which branch is
+taken. (Section~\ref{sec:algorithm-cost} discusses \emph{verifier compute
+cost}, which is \emph{not} constant across indices, even though proof size
+is.)
+
+\paragraph{Prover time and storage.} \textsc{BuildProof} as written treats
+$\mathrm{ending}(a,k)$ and $\mathrm{prewrap}(a,k)$ as values simply
+available to read off -- but, unlike the checkpoints $\CK[a]$, neither is a
+literal byte range stored anywhere in the structured file
+(Definition~\ref{def:prewrap-ending}): both are internal running-chain-
+state snapshots that existed only transiently while the file was originally
+built. Section~\ref{sec:construction}'s $O(\log N)$ working-memory claim is
+for the \emph{build} step alone, and explicitly discards each checkpoint
+once its block closes; it says nothing about the cost of later answering an
+arbitrary proof request. Two honest options exist, with a real space/time
+trade-off between them, and a deployment needs to pick one explicitly:
+\begin{itemize}
+\item \textbf{Cache every snapshot at build time.} Retain all $O(N)$
+  intermediate $\mathrm{ending}$/$\mathrm{prewrap}$ values (one 32-byte, or
+  in general $w$-bit, entry per $\mathrm{MID}$ emission) alongside the
+  file, rather than discarding them. \textsc{BuildProof} then costs
+  $O(\log N)$ time per request, matching proof \emph{size}, at the cost of
+  $O(N)$ storage held indefinitely by whoever answers proof requests (in
+  addition to the file itself). This is what the reference implementation
+  does, for simplicity, exactly as Section~\ref{sec:construction} already
+  notes for the analogous build-time choice.
+\item \textbf{Recompute on demand.} Keep only the file bytes and answer
+  each proof request by re-running the hash chain from the nearest
+  available checkpoint up to the needed snapshot. Without any cached
+  snapshots this costs up to $O(N)$ compression calls per proof request --
+  no better than a full re-hash -- though a partial cache (e.g.\ one
+  snapshot every $O(\sqrt{N})$ positions) trades a smaller, tunable storage
+  budget against a correspondingly higher, but still sublinear, per-request
+  recomputation cost.
+\end{itemize}
+Either way, the $O(\log N)$ figures emphasized elsewhere in this paper are
+proof \emph{size} and verifier \emph{compute}, not prover storage: a
+FlatMerkle prover that wants every request answered in $O(\log N)$ time,
+matching the verifier's own cost, needs $O(N)$ storage to do it, the same
+asymptotic footprint an equivalent Merkle-tree prover needs to keep the
+whole tree (not just the root) on hand.
+
+\subsection{Verifying a proof}
+
+\begin{algorithm}[H]
+\caption{$\textsc{EvalBlock}(a, k, t, \mathit{ckpt})$ -- verifier, symmetric to \textsc{Recurse}}
+\label{alg:evalblock}
+\begin{lstlisting}[style=pseudo]
+function EvalBlock(a, k, t, ckpt):
+    if k = 1:
+        s := C(C(ckpt, D0), D1)      # the proof's base pair
+        return C(s, pad_b(ckpt))     # re-inject checkpoint,
+                                      # closing the base pair
+    h := 2^(k-1)
+    if t < a + h:                     # left branch
+        left_end  := EvalBlock(a, k-1, t, ckpt)
+        sib_prewrap := read next reveal
+        right_end := C(sib_prewrap, pad_b(left_end))
+                                       # fold in the value just verified
+        return C(right_end, pad_b(ckpt))
+    else:                              # right branch
+        left_end  := read next reveal
+        right_end := EvalBlock(a+h, k-1, t, left_end)
+        return C(right_end, pad_b(ckpt))
+\end{lstlisting}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{$\textsc{Verify}(N, \Delta, \mathit{index}, \mathit{data}, \pi)$ -- top-level verifier}
+\begin{lstlisting}[style=pseudo]
+function Verify(N, Delta, index, data, pi):
+    if N < 4 or N is not a power of two: return false   # domain: N = 2^L, L >= 2
+    if index < 0 or index >= N: return false   # index out of range
+    (D0, D1, reveals) := pi                    # reveals: a shared queue,
+                                                # consumed front-to-back by
+                                                # every "read next reveal"
+                                                # line below and inside
+                                                # EvalBlock (Section 3.3)
+    a0 := index - (index mod 2)                # pair start, derived from
+                                                # the verifier's OWN index --
+                                                # NEVER taken from pi
+    if index = a0: expected := D0 else: expected := D1
+    if data != expected: return false           # supplied data disagrees with proof
+    L := log2(N)
+    h_top := 2^(L-1)
+    if a0 < h_top:
+        left_end := EvalBlock(0, L-1, a0, IV)     # consumes from reveals
+        if reveals is empty: return false          # ran out before the top fold
+        sib_prewrap := read next reveal
+        raw_state := C(sib_prewrap, pad_b(left_end))
+    else:
+        if reveals is empty: return false
+        left_end := read next reveal
+        raw_state := EvalBlock(h_top, L-1, a0, left_end)
+    if reveals is not empty: return false        # leftover reveals: malformed
+    return finalize(raw_state, N) = Delta          # public length-padding + compare
+\end{lstlisting}
+\end{algorithm}
+
+\begin{remark}[A natural-looking but insecure alternative: trusting a
+proof-supplied pair start]
+\label{rem:a0-bug}
+A verifier might instead accept a pair start $a_0$ as part of the proof
+itself, $\pi = (a_0, D_0, D_1, \mathit{reveals})$, and branch on whether
+$\mathit{index} = a_0$ or $\mathit{index} = a_0+1$ to decide which of
+$D_0, D_1$ is ``the'' claimed data -- exactly as \textsc{BuildProof}
+computes $a_0$ internally. This is a genuine soundness hole, and a
+collision-free one: \textsc{EvalBlock}'s recursion branches only on
+whether the recursion target lies below a block's midpoint, and every
+branch point above the base case compares against a power-of-two
+threshold $h = 2^{k-1} \ge 2$, so the least-significant bit of the
+recursion target never affects any branch decision -- indices $i-1$ and
+$i$ (for odd $i$) take an \emph{identical} recursion path. An honest
+proof for index $i-1$ carries $D_0 = D[i-1]$, and a verifier that trusts a
+proof-supplied $a_0$ can be asked to check $(\mathit{index}=i,\
+\mathit{data}=D[i-1], \pi)$ with $a_0$ relabelled to $i$ instead of $i-1$
+(same $D_0, D_1$, same reveals, unchanged): the trusting verifier sees
+$\mathit{index}=a_0$, sets $\mathit{expected} := D_0 = D[i-1]$, and
+accepts -- reaching the genuine digest with no free-start collision at
+all, since the recursion itself never used $a_0$ for anything but this one
+comparison. The construction above avoids this by design: $a_0$ is never
+read from $\pi$, only derived from the verifier's own $\mathit{index}$,
+which the verifier is asking about in the first place and has no reason
+to distrust. (The reference implementations already follow this
+discipline -- \texttt{verify\_proof} derives its pair start solely from
+the caller-supplied target index, and the wire-level \texttt{Proof} object
+carries no separate pair-start field at all.)
+\end{remark}
+
+\textsc{EvalBlock}'s ``read next reveal'' lines share the same queue and
+must reject if it is empty: too few reveals is as malformed as too many,
+and an implementation that substitutes a default value for a missing
+reveal reopens a gap of the same kind as Remark~\ref{rem:prewrap-bug}'s.
+\textsc{Verify} first enforces the domain $N = 2^L$, $L \ge 2$
+(Section~\ref{sec:construction}; for $N=2$ there is no top-level split),
+then $\mathit{index} \in [0,N)$, derives $a_0$ from $\mathit{index}$
+alone, checks $\mathit{data}$ against the element of the base pair that
+$\mathit{index}$ selects, mirrors \textsc{BuildProof}'s top-level split
+(there is no $\mathrm{MID}$ joining the two root blocks; the finalization
+plays that role), rejects missing or leftover reveals, and only then
+compares the finalized chain state with the digest. Both reference
+implementations perform all of these checks; a re-implementation of
+\textsc{EvalBlock}'s recursive core alone should add them.
+
+\begin{remark}[A natural-looking but insecure alternative]
+\label{rem:prewrap-bug}
+A verifier might be tempted to compute the left branch's
+$\mathit{left\_end}$ recursively (as required) but then discard it,
+returning
+\[
+\C(\mathit{right\_end}, \mathrm{pad}_b(\mathit{ckpt}))
+\]
+without ever folding $\mathit{left\_end}$ into the check. This is a
+genuine soundness hole: tampering with any value inside the left recursion
+goes undetected, because the final check never actually depends on it.
+The construction above avoids this by design (left branch of Algorithm~\ref{alg:evalblock}):
+\[
+\mathit{right\_end} := \C(\mathit{sib\_prewrap}, \mathrm{pad}_b(\mathit{left\_end})).
+\]
+The verifier must combine
+the just-verified $\mathit{left\_end}$ with the revealed sibling
+\emph{pre-close} state, not simply trust a separately revealed
+\emph{post-close} state for the sibling and ignore what it just computed.
+We recommend testing for exactly this class of omission directly --
+flipping a single bit in every individually revealed value and confirming
+rejection -- since it is the kind of gap that is easy to miss by
+inspection alone.
+\end{remark}
+
+\subsection{Verifier compute cost varies by index; proof size does not}
+\label{sec:algorithm-cost}
+
+Although every proof has exactly $L-1$ reveals, the number of
+compression-function calls the \emph{verifier} performs to check a proof is
+not constant: it depends on how often the target's recursion path takes the
+left branch (which costs 2 calls at that level: the fold, then the
+checkpoint re-injection) versus the right branch (which costs 1 call: only
+the checkpoint re-injection, since the sibling's closed value is used
+as-is). For $N=32$ ($L=5$), measured directly against the real verifier
+implementation:
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Index & 0 & 8 & 15 & 23 & 30 \\
+\midrule
+Compression calls (incl.\ finalization) & 11 & 10 & 8 & 8 & 7 \\
+\bottomrule
+\end{tabular}
+\caption{Verifier compression-function calls by target index, $N=32$. The
+minimum, 7, is achieved by indices that take the cheap (right) branch at
+every level; the maximum, 11, by index 0, which takes the left branch at
+every level. In general the range is $[L+2,\ 2L+1]$ (including one constant
+finalization call): the ratio $(2L+1)/(L+2)$ approaches, but never reaches,
+$2\times$ as $L \to \infty$, and is strictly less than $2\times$ for every
+finite $L$ (here, $L=5$: $11/7 \approx 1.57\times$) -- bounded, not
+asymptotically growing relative to $L$.}
+\label{tab:verifier-cost}
+\end{table}
+
+This asymmetry is a lever, not just a cost -- but the right way to describe
+it is by \emph{bit pattern}, not by index magnitude. The exact cost is
+$L + 2 + \#\{\text{zero bits among bits } 1..L{-}1 \text{ of the target}\}$,
+which depends only on which of those bits are set, not on how large the
+index is: for $N=32$, index 16 ($\texttt{10000}_2$) costs 10 -- almost as
+expensive as index 0's 11, and no cheaper than index 8's 10 -- despite
+being numerically closer to the ``high-index end'' than either. Index 30
+($\texttt{11110}_2$) gets the minimum cost of 7 not because it is large,
+but because its high-order bits happen to all be 1. The correct lever is
+therefore: if the elements most likely to be queried are known in advance,
+placing them at indices whose high-order bits are all 1 -- concretely, the
+last few elements of the file -- favors the cheap, right-branch-heavy
+verification path and reduces their average verification cost for free,
+with no change to the construction or to the constant proof-size
+guarantee. Since the whole range is bounded, $[L+2,\ 2L+1]$, the payoff of
+this placement is at most a factor of roughly 2 and does not grow with
+$N$ -- a genuine but modest optimization, not an asymptotic one.
+
+\paragraph{A proof always discloses its whole base pair.}
+\label{par:pair-disclosure}
+\textsc{BuildProof} returns $D[a_0]$ and $D[a_0{+}1]$ unconditionally, where
+$a_0 = a - (a \bmod 2)$ -- so a proof requested for target index $a$ always
+discloses \emph{both} raw elements of its pair, not just $D[a]$: proving
+index 7 necessarily also reveals element 6, whether or not anyone asked
+about element 6. This is a real, semantic difference from an ordinary
+Merkle proof, whose leaf hash need not expose any neighboring leaf, and it
+is worth stating plainly rather than leaving implicit. It also affects the
+size comparison in Section~\ref{sec:examples}'s table and
+Section~\ref{sec:optimal-size}: with element size equal to the state width,
+$D=W$, FlatMerkle's proof size $2D + (L-1)W$ and a same-shape Merkle
+proof's size $LW + D$ come out numerically \emph{equal} -- but FlatMerkle's
+byte count buys one fewer sibling hash \emph{and} one extra disclosed
+element, not a strictly smaller disclosure. Anyone relying on FlatMerkle
+proofs where the neighboring element's privacy matters should account for
+this explicitly.

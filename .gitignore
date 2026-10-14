@@ -1,0 +1,27 @@
+# LaTeX build artifacts (paper/main.pdf is kept)
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Not part of the paper: reviews, drafts, working notes, local scripts, keys
+*review*.md
+review_*.pdf
+paper/section_*_draft.tex
+/loglink_report.md
+/figures/
+paper/figures/*_n32_*.png
+*.sh
+gpg_public_key.txt

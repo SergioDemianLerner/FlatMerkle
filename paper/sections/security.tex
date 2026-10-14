@@ -1,0 +1,732 @@
+\section{Security}
+\label{sec:security}
+
+\subsection{Assumptions}
+
+\begin{assumption}[Free-start collision resistance]
+\label{ass:freestart}
+It is computationally infeasible to find $(s_1, b_1) \ne (s_2, b_2) \in
+\{0,1\}^w \times \{0,1\}^b$ with $\C(s_1,b_1) = \C(s_2,b_2)$.
+\end{assumption}
+
+This differs from the collision resistance ordinarily assumed of a hash
+function $H$, which fixes the starting state to $\mathrm{IV}$ and only
+requires hardness of finding two distinct \emph{messages} colliding under
+that fixed start. Assumption~\ref{ass:freestart} is strictly stronger: it
+must hold for \emph{adversarially chosen} starting states, because a
+FlatMerkle verifier accepts several state values as untrusted input (the
+proof's reveals) and only ever ties them to the truth via later equality
+checks against the published digest -- never by re-deriving them from
+$\mathrm{IV}$ itself. This is exactly the property the construction needs,
+and we state it as a distinct, named assumption rather than assume it
+follows automatically from ordinary collision resistance of $H$; in
+general it does not -- free-start collision resistance of a
+Davies--Meyer-style compression step is a materially stronger, separately
+studied property~\citep{dobbertin1996}.
+
+\begin{remark}[This assumption has failed for real, deployed compression
+functions]
+\label{rem:freestart-history}
+The gap between Assumption~\ref{ass:freestart} and ordinary collision
+resistance is not merely theoretical. Free-start collisions were found for
+MD5's compression function in 1996~\citep{dobbertin1996}, years before any
+collision was known for MD5 itself, and for the full SHA-1 compression
+function in 2015~\citep{stevens2015shappening} -- two years before the
+first ordinary SHA-1 collision (SHAttered, 2017). A FlatMerkle instance
+built on SHA-1 was therefore already insecure in 2015, at a time when
+SHA-1 was still considered safe for ordinary hashing by most practitioners.
+Assumption~\ref{ass:freestart} should be checked against the
+free-start-collision literature for the specific compression function in
+use, not against that function's ordinary collision-resistance track
+record. For SHA-256, this paper's main instantiation, the best published
+result we are aware of is a practical \emph{semi}-free-start collision
+for $39$ of its $64$ steps \citep{li2024sha2}; no free-start collision is
+known for the full compression function. For BLAKE2b, used in
+Section~\ref{sec:rollup-eth}, Guo et al.\ report weaknesses of the
+compression function when its \emph{entire} 16-word internal state is
+chosen \citep{guo2013blake2}; a FlatMerkle verifier only lets an adversary
+choose the 8-word chaining value and the message block, and fixes the
+remaining inputs itself (see Section~\ref{sec:rollup-eth}), but this
+margin is narrower than for SHA-256 and should be reassessed before
+deployment.
+\end{remark}
+
+\begin{assumption}[Raw compression-function access]
+\label{ass:mdaccess}
+The hash function $H$ is built from $\C$ via the standard Merkle--Damg\aa rd
+iteration with a public finalization, and both prover and verifier have
+direct access to $\C$ itself (not merely to $H$).
+\end{assumption}
+
+This rules out hash functions where the internal chaining step is not
+separately exposed or well-defined (e.g.\ most sponge constructions --
+see the discussion of adapting FlatMerkle to Keccak-256 in
+Section~\ref{sec:conclusion}), and is satisfied by the Merkle--Damg\aa rd
+family generally, including SHA-256, SHA-1, and MD5. Satisfying
+Assumption~\ref{ass:mdaccess} says nothing about whether
+Assumption~\ref{ass:freestart} also holds for a given member of that
+family -- see Remark~\ref{rem:freestart-history}.
+
+\begin{remark}[No domain separation between data and $\mathrm{MID}$ blocks]
+\label{rem:domain-sep-bit}
+A data element may be byte-identical to some $\mathrm{MID}$ block; nothing
+in the construction prevents it. This does not affect
+Theorems~\ref{thm:soundness} or~\ref{thm:binding}: which positions are
+data and which are checkpoints is fixed by $(\mathit{index}, N)$ before any
+byte is examined, never inferred from content. A deployment wanting an
+extra margin can still tag $\mathrm{MID}$ blocks, provided the tag uses
+the $b-w$ bits that $\mathrm{pad}_b$ leaves free (256 bits for SHA-256)
+and application data is escaped to avoid the same pattern. Overwriting any
+of the checkpoint's own $w$ bits instead would break the injectivity of
+$\mathrm{pad}_b$, which both theorems use. In a Bitcoin annex, any such
+convention must be known to anyone parsing the raw annex bytes, since
+consensus does not distinguish the two.
+\end{remark}
+
+\subsection{Soundness}
+
+All three security arguments in this section -- soundness, binding, and
+fraud-proof soundness (Section~\ref{sec:fraud-proofs}) -- compare two
+executions of the same verifier recursion that reach the same output, and
+propagate that equality from outputs back to inputs. The one subtlety is
+the checkpoint argument: in a right branch, \textsc{EvalBlock} seeds the
+child with a \emph{revealed} value, not with its own $\mathit{ckpt}$, so a
+naive ``descend and compare'' walk cannot assume a child's checkpoint
+argument is already known to agree in both executions. We therefore state
+the induction once, with a hypothesis that quantifies over
+\emph{unequal} checkpoint arguments, in a form general enough to cover the
+modified evaluator the fraud-proof verifier uses.
+
+Fix $N = 2^L$, a target $t$, and a set $V$ of $t$'s own containing levels
+(Definition~\ref{def:anchored} below; $V = \emptyset$ for ordinary
+verification). $\textsc{EvalBlock}_V$ is \textsc{EvalBlock} except that, at
+each level $(a,k) \in V$, its own closing fold uses a supplied $b$-bit
+string $m_{(a,k)}$ in place of $\mathrm{pad}_b(\mathit{ckpt})$;
+$\textsc{EvalBlock}_\emptyset = \textsc{EvalBlock}$.
+
+\begin{definition}[Anchored level]
+\label{def:anchored}
+For $1 \le k \le L-1$ let $a_k = \lfloor t/2^k \rfloor 2^k$, so that
+$\mathrm{block}(a_k,k)$ is $t$'s containing block at level $k$. The
+checkpoint argument at level $k$ is \emph{anchored} (with respect to $t$
+and $V$), written $\mathrm{bnd}(k)$, if
+\[
+\mathrm{bnd}(1) = \text{true}, \qquad
+\mathrm{bnd}(k) = \big[(a_k,k) \notin V\big] \ \vee\
+\big[\mathrm{bit}_{k-1}(t) = 0 \ \wedge\ \mathrm{bnd}(k-1)\big]
+\quad (2 \le k \le L-1),
+\]
+and, additionally, $\mathrm{bnd}(L-1) = \text{true}$ whenever $t < 2^{L-1}$.
+In words: a checkpoint is anchored if it survives in its own closing fold;
+or if the level takes the left branch, in which case the same value is
+passed down to the child and the question recurses; the base case is
+always anchored because $\C(\mathit{ckpt}, d_0)$ consumes it whether or not
+its closing fold is substituted; and the top-level left root's checkpoint
+is the public constant $\mathrm{IV}$, fixed by the verifier itself. With
+$V = \emptyset$ every level is anchored.
+\end{definition}
+
+\begin{lemma}[Extraction]
+\label{lem:extraction}
+Let $1 \le k \le L-1$ and consider two executions of
+$\textsc{EvalBlock}_V(a_k, k, t, \cdot)$ with checkpoint arguments
+$\mathit{ckpt}_1, \mathit{ckpt}_2$ -- not assumed equal -- and their own
+reveals, base elements and substituted strings. If both return the same
+value, then either a free-start collision in $\C$ can be extracted from the
+two executions with $O(k)$ compression calls, or all of the following
+hold: (i) both consumed the same base elements $d_0, d_1$, the same
+left-branch sibling reveals, and the same substituted strings
+$m_{(a_j,j)}$ for every $(a_j,j) \in V$, $j \le k$; (ii) for every $j \le
+k$ with $\mathrm{bnd}(j)$, the two executions' checkpoint arguments at
+level $j$ coincide -- in particular $\mathit{ckpt}_1 = \mathit{ckpt}_2$ if
+$\mathrm{bnd}(k)$, and every right-branch reveal that seeds an anchored
+child coincides.
+\end{lemma}
+
+\begin{proof}
+Induction on $k$. Every invocation ends with one compression call
+$\C(x_i, c_i)$, where $c_i = \mathrm{pad}_b(\mathit{ckpt}_i)$ if
+$(a_k,k) \notin V$ and $c_i = m_{(a_k,k),i}$ otherwise. Equal outputs give
+either a collision or $x_1 = x_2$ and $c_1 = c_2$; in the first sub-case
+injectivity of $\mathrm{pad}_b$ (Definition~\ref{def:padb}) gives
+$\mathit{ckpt}_1 = \mathit{ckpt}_2$, in the second the substituted strings
+agree.
+
+\emph{Base, $k=1$:} $x_i = \C(\C(\mathit{ckpt}_i, d_{0,i}), d_{1,i})$, so
+equal $x$ gives a collision or $d_{1,1} = d_{1,2}$ and equal inner outputs,
+which in turn gives a collision or $\mathit{ckpt}_1 = \mathit{ckpt}_2$ and
+$d_{0,1} = d_{0,2}$ -- regardless of $V$, matching $\mathrm{bnd}(1)$.
+
+\emph{Left branch} ($\mathrm{bit}_{k-1}(t) = 0$): $x_i =
+\C(s_i, \mathrm{pad}_b(\ell_i))$ with $s_i$ the sibling's revealed prewrap
+and $\ell_i = \textsc{EvalBlock}_V(a_k, k{-}1, t, \mathit{ckpt}_i)$. Equal
+$x$ gives a collision or $s_1 = s_2$ and $\ell_1 = \ell_2$; the induction
+hypothesis applied to the child (whose checkpoint argument is the
+\emph{same} $\mathit{ckpt}_i$) gives a collision or (i)--(ii) below level
+$k$, including $\mathit{ckpt}_1 = \mathit{ckpt}_2$ if $\mathrm{bnd}(k-1)$.
+Together with the closing fold: $\mathit{ckpt}$ is pinned iff $(a_k,k)
+\notin V$ or $\mathrm{bnd}(k-1)$, which is $\mathrm{bnd}(k)$.
+
+\emph{Right branch} ($\mathrm{bit}_{k-1}(t) = 1$): $x_i =
+\textsc{EvalBlock}_V(a_k + 2^{k-1}, k{-}1, t, r_i)$, where $r_i$ is a
+\emph{revealed} value, not $\mathit{ckpt}_i$. The induction hypothesis
+gives a collision or (i)--(ii) below level $k$, including $r_1 = r_2$ if
+$\mathrm{bnd}(k-1)$. Here $\mathit{ckpt}_i$ appears \emph{only} in the
+closing fold, so it is pinned iff $(a_k,k) \notin V$, which is again
+$\mathrm{bnd}(k)$.
+
+Each level inspects $O(1)$ calls, so the collision, if any, is found within
+$O(k)$ calls by recomputing both executions.
+\end{proof}
+
+The only place the top-level split of \textsc{Verify} differs from a
+generic level is that the left root is seeded with $\mathrm{IV}$ in both
+executions -- which is why Definition~\ref{def:anchored} marks it anchored
+unconditionally -- and that the top-level sibling's closing fold,
+$\C(\mathit{sib\_prewrap}, \mathrm{pad}_b(\mathit{left\_end}))$, is never
+substituted. Finalization is one further fixed public suffix of compression
+calls on blocks determined only by $N$ (for SHA-256 and $64$-byte items,
+exactly one padding block), so equal digests give either a collision or
+equal raw chain states. Combining these with Lemma~\ref{lem:extraction}
+gives the following top-level statement, used by every theorem below.
+
+\begin{corollary}[Top-level extraction]
+\label{cor:top-extraction}
+If two executions of \textsc{Verify} (with $V = \emptyset$), or of the
+fraud-proof fold of Section~\ref{sec:fraud-proofs} (with the same $t$ and
+$V$), both for the same $N$ and target $t$, finalize to the same digest,
+then either a free-start collision in $\C$ can be extracted with $O(\log
+N)$ compression calls, or the two executions consumed the same $d_0, d_1$,
+the same left-branch reveals, the same substituted strings, and agree on
+the checkpoint argument at every anchored level of $t$'s path. With $V =
+\emptyset$ this means the two proofs are identical.
+\end{corollary}
+
+\begin{theorem}[Soundness]
+\label{thm:soundness}
+Under Assumptions~\ref{ass:freestart} and~\ref{ass:mdaccess}, no adversary
+can produce $(\mathit{index}, \mathit{data}, \pi)$ accepted by
+\textsc{Verify} against a genuine digest $\Delta$, where $\mathit{data}$
+disagrees with the true element $D[\mathit{index}]$ that $\Delta$ actually
+commits to, without also producing a free-start collision in $\C$.
+\end{theorem}
+
+\begin{proof}
+Let $\pi^*$ be the genuine proof for $\mathit{index}$, built by
+\textsc{BuildProof} against the real file; it is accepted
+(Section~\ref{sec:completeness}). Suppose an adversary's
+$(\mathit{index}, \mathit{data}, \pi)$ is also accepted, with
+$\mathit{data} \ne D[\mathit{index}]$. Both executions use the same
+$\mathit{index}$ and $N$, hence the same target pair start $a_0$ and the
+same branch decisions, and both finalize to $\Delta$.
+Corollary~\ref{cor:top-extraction} with $V = \emptyset$ yields either a
+free-start collision or $\pi = \pi^*$; in the latter case \textsc{Verify}
+selects $\mathit{data}$ from the same $(d_0,d_1)$ by the same parity of
+$\mathit{index}$, so $\mathit{data} = D[\mathit{index}]$, a contradiction.
+\end{proof}
+
+\subsection{Completeness}
+\label{sec:completeness}
+
+Completeness is immediate from construction: for any index and any honestly
+built file, \textsc{EvalBlock} run against the reveals produced by
+\textsc{BuildProof} recomputes, level by level, exactly the same sequence of
+compression calls the builder performed -- by inspection of the two
+algorithms in Section~\ref{sec:algorithm}, they are symmetric by design.
+This was also confirmed empirically: every index of every tested $N \in
+\{4,8,16,32,64\}$ verifies successfully against a genuinely built file.
+
+\subsection{Binding: what an accepting proof actually certifies}
+\label{sec:binding}
+
+It might seem that Theorem~\ref{thm:soundness}'s technique establishes
+something stronger than it actually does: that for \emph{any} byte string
+$F'$ a publisher chooses to publish -- canonically built or not -- no
+accepting proof could name data other than the bytes genuinely present at
+$\mathrm{position}(\mathit{index})$ in $F'$. That claim is false, and
+Remark~\ref{rem:layout-forgery} below gives a working forgery against it.
+What Theorem~\ref{thm:soundness}'s technique actually establishes, for an
+arbitrary (possibly non-canonical) $F'$, is a strictly weaker and correct
+property: \emph{binding}, not \emph{provenance}.
+
+\begin{theorem}[Binding]
+\label{thm:binding}
+Fix $N = 2^L$ ($L \ge 2$, the domain \textsc{Verify} itself checks -- see
+Section~\ref{sec:algorithm}), any published digest $\Delta'$, and any
+$\mathit{index} \in [0, N)$. Under Assumption~\ref{ass:freestart}, there is
+at most one value $\mathit{data}$ for which some proof $\pi$ makes
+\textsc{Verify} accept $(N, \mathit{index}, \mathit{data}, \pi)$ against
+$\Delta'$ -- regardless of whether $\Delta'$ commits to a canonically built
+file. ($N$ is fixed throughout, not just $\Delta'$ and $\mathit{index}$,
+because \textsc{Verify}'s recursion structure -- how many levels deep it
+goes, and where each branch falls -- is itself a function of $N$; two
+different $N$ values would in general give two entirely different
+recursions over the same $\Delta'$, so the claim is only meaningful, and
+only proved, for one $N$ at a time.)
+\end{theorem}
+
+\begin{proof}
+Suppose two accepting triples $(\mathit{index}, \mathit{data}_1, \pi_1)$
+and $(\mathit{index}, \mathit{data}_2, \pi_2)$, both against the same fixed
+$N$, verify against $\Delta'$, with $\mathit{data}_1 \ne \mathit{data}_2$.
+Corollary~\ref{cor:top-extraction} (with $V = \emptyset$) only ever
+compares two \emph{accepting executions} against each other; it never
+assumes either was built by the honest \textsc{Build} procedure, only that
+both recursion structures are fixed by $(\mathit{index}, N)$ -- identical
+here, since $N$ is fixed -- and that both reach the same $\Delta'$. It
+therefore yields either a free-start collision or $\pi_1 = \pi_2$, hence
+$\mathit{data}_1 = \mathit{data}_2$, contradicting the assumption.
+\end{proof}
+
+\begin{remark}[Binding does not imply the accepted value matches $F'$'s own bytes -- a working forgery]
+\label{rem:layout-forgery}
+Take a target $\mathit{index}$ in the left half of the file. The verifier's
+very last step is $\mathit{raw\_state} = \C(r,\ \mathrm{pad}_b(y))$, where
+$y$ is the value the left-half recursion just computed and $r$ is an
+\emph{unverified} reveal -- nothing above binds $r$ to anything. In a
+canonically built file, the file's own last 64 bytes are exactly
+$\mathrm{MID}(2^{L-1}) = \mathrm{pad}_b(\CK[2^{L-1}]) = \mathrm{pad}_b(\mathrm{ending}(0,L-1))$,
+i.e.\ the true ending of the real left-half data -- but nothing forces a
+\emph{publisher} to write that value there. A publisher can instead:
+pick arbitrary fake $D[0], D[1]$ and arbitrary fake inner reveals; run the
+left-half recursion forward on this fake path to obtain some $y_{\mathit{fake}}$;
+write $\mathrm{pad}_b(y_{\mathit{fake}})$, instead of the true checkpoint, as
+the file's actual last 64 bytes; and separately place whatever real data
+they like at $\mathrm{position}(0)$ elsewhere in the file. Reading off the
+true chain state $r$ entering that last block -- a public quantity, computable
+by anyone holding $F'$, no secret or collision required -- the fake
+$(D[0], D[1], \text{reveals})$ now verifies against the real, published
+$\Delta' = H(F')$, even though the bytes genuinely sitting at
+$\mathrm{position}(0)$ in $F'$ are something else entirely. This costs
+\emph{no} free-start collision: it is exactly the deviation
+Theorem~\ref{thm:binding} does not rule out (both fake and genuine
+$\mathit{index}=0$ claims cannot \emph{simultaneously} be accepting, by
+binding -- but binding says nothing about which one, if either, matches
+what a reader who simply parses $F'$ would call ``the data at
+$\mathrm{position}(0)$''). Confirmed against the real SHA-256 reference
+implementation (\texttt{loglink\_annex.py}): a file identical to a
+canonical one except for a single 32-byte checkpoint, whose SHA-256 is a
+completely ordinary digest, admits an accepting proof for forged
+$\mathit{index}=0$ data.
+\end{remark}
+
+An accepting proof therefore certifies membership in \emph{the dataset
+defined by the file's own accepting proofs}, not ``the bytes at
+$\mathrm{position}(i)$ of $F'$'' as literally parsed off the byte string --
+the two coincide only when $F'$ is canonically built to begin with, a
+property Theorem~\ref{thm:binding} says nothing about and which cannot be
+checked from $\Delta'$ alone in less than $O(N)$ work. Section~\ref{sec:fraud-proofs}
+gives that missing check.
+
+\subsection{Fraud proofs: proving a published file is not canonically built}
+\label{sec:fraud-proofs}
+
+Binding rules out equivocation but, as Remark~\ref{rem:layout-forgery}
+shows, does not rule out a publisher shipping a file that is simply not
+canonically built in the first place. Recovering a soundness guarantee
+that actually protects a reader of $F'$ needs a second, independent
+mechanism: a way for anyone holding the \emph{whole} file -- a
+\emph{watcher} -- to detect a non-canonical checkpoint and turn that one
+finding into a compact, $O(\log N)$ proof that a lightweight verifier, who
+never sees more than a handful of 32/64-byte values, can check without
+re-hashing $F'$.
+
+\begin{definition}[Violation]
+$\mathrm{block}(a,k)$ is a \emph{violation} in $F'$ if the bytes physically
+present at $\mathrm{MID}(a)$'s position disagree with
+$\mathrm{pad}_b(\CK[a])$, where $\CK[a]$ is the real running compression
+state that genuinely enters position $a$ when $F'$ is hashed left to
+right -- i.e.\ $\mathrm{MID}(a)$ fails to honestly re-inject the checkpoint
+it claims to.
+\end{definition}
+
+\begin{algorithm}[H]
+\caption{$\textsc{ScanForViolations}(F')$ -- watcher, $O(N)$, one linear pass}
+\label{alg:scan}
+\begin{lstlisting}[style=pseudo]
+state := IV
+for each item in F', left to right:
+    if item is D[a] and CK[a] not yet set:
+        CK[a] := state                  # entry checkpoint, captured once
+    if item is MID(a):
+        expected := pad_b(CK[a])
+        if item.bytes != expected:
+            record violation (a, k, item.bytes)
+    state := C(state, item.bytes)        # always advance with the REAL bytes
+\end{lstlisting}
+\end{algorithm}
+
+Advancing with the file's real bytes regardless of whether a violation was
+just found -- rather than the value that \emph{should} have been there --
+is what lets a single pass surface every independent violation in one
+scan, including several at once.
+
+A single disputed level is not always enough, however: if two or more
+violations lie on the \emph{same} root-to-leaf path -- an ancestor block
+and one of its own descendants both corrupted -- substituting real bytes
+at only one of them leaves the \emph{other} corrupted level still folded
+in using the canonical (wrong) value, and the reconstruction fails to
+reach $\Delta'$ regardless of which one is chosen (Remark~\ref{rem:fraud-scope-general}
+below gives the mechanism). \textsc{BuildFraudProof} and
+\textsc{VerifyFraudProof} therefore take a \emph{set} of disputed levels,
+all lying on one target index's own root-to-leaf path, and substitute at
+every one of them simultaneously.
+
+$\textsc{BuildFraudProof}$ must \emph{not} simply call the ordinary
+$\textsc{BuildProof}$, which recomputes everything canonically from
+scratch (using $\mathrm{pad}_b(\CK[a])$ for every $\mathrm{MID}$, by
+definition -- the very thing that would be wrong for a non-canonical
+$F'$). Instead it reads directly off the snapshots
+$\textsc{ScanForViolations}$ (Algorithm~\ref{alg:scan}) already recorded
+while walking $F'$'s own real bytes left to right:
+
+\begin{algorithm}[H]
+\caption{$\textsc{ExtractPhysicalProof}(F', t)$ -- reads BuildProof-shaped values off a real, possibly non-canonical hash trace}
+\begin{lstlisting}[style=pseudo]
+# Same shape as BuildProof(t) -- L-1 reveals, two base-case data
+# elements -- but every value below is read from the ACTUAL scan
+# state ScanForViolations recorded while hashing F' left to right,
+# never recomputed canonically:
+d0 := the real bytes physically at D[a0]'s position in F', a0 = t - (t mod 2)
+d1 := the real bytes physically at D[a0+1]'s position in F'
+reveals := the sequence of scan.prewrap_of(.,.) / scan.ending_of(.,.)
+           values BuildProof(t)'s own recursion would visit, each read
+           from the scan's recorded running state at that exact
+           position in F' -- not recomputed from a canonical checkpoint
+return (d0, d1, reveals)
+\end{lstlisting}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{$\textsc{BuildFraudProof}(F', t, V)$ -- watcher, $O(\log N)$, for known violations $V$ on target $t$'s path}
+\label{alg:build-fraud}
+\begin{lstlisting}[style=pseudo]
+# t: target index: any (a,k) in V must be one of t's OWN containing
+# blocks, i.e. a = t with its low k bits cleared -- all of V lies on
+# t's single root-to-leaf recursion path (self_positions(L,t)).
+(d0, d1, reveals) := ExtractPhysicalProof(F', t)
+actual_mid_bytes := { (a,k): the real bytes physically at MID(a,k)'s
+                       position in F', for each (a,k) in V }
+return (t, V, d0, d1, reveals, actual_mid_bytes)
+\end{lstlisting}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{$\textsc{VerifyFraudProof}(N, \Delta', t, V, d_0, d_1, \mathit{reveals}, \mathit{actual\_mid\_bytes})$ -- $O(\log N)$}
+\begin{lstlisting}[style=pseudo]
+# Structural checks, mirroring EVERY check ordinary Verify makes
+# (Section 3.3) before it does anything else -- explicit, not implicit:
+if N < 4 or N is not a power of two: return false
+if t < 0 or t >= N: return false
+if d0 or d1 is not exactly b bits wide: return false
+if any V level (a,k) is not in self_positions(log2(N), t): return false
+if actual_mid_bytes's key set != V: return false   # exactly one entry
+                                                     # per disputed level,
+                                                     # no unreferenced ones
+if any actual_mid_bytes[.] is not exactly b bits wide: return false
+
+# Runs EvalBlock exactly as ordinary Verify does for target index t,
+# using the real d0, d1 and reveals, except that at EVERY disputed level
+# (a,k) in V the closing fold uses the real bytes claimed for that level
+# instead of pad_b(ckpt). A mismatch is only COUNTED at an anchored level
+# (bnd, "Anchored level" definition above): at an unanchored one, ckpt
+# feeds no compression call
+# once its closing fold is substituted, so it is a free variable and a
+# comparison against it proves nothing.
+A := { (a,k) in self_positions(log2(N), t) : bnd(k) holds for (t, V) }
+mismatch := false
+levels_reached := {}
+function EvalBlock'(a', k', target, ckpt):
+    ... exactly EvalBlock (Section 3.3), including its own "read next
+    reveal, reject if the queue is empty" checks, except at its own
+    closing step:
+    if (a', k') in V:
+        levels_reached.add((a', k'))
+        closing_block := actual_mid_bytes[(a', k')]     # not pad_b(ckpt)
+        if (a', k') in A and actual_mid_bytes[(a', k')] != pad_b(ckpt):
+            mismatch := true
+    else:
+        closing_block := pad_b(ckpt)                      # unchanged
+    ... fold closing_block in exactly as EvalBlock does
+
+raw_state := (top-level call of EvalBlock', mirroring Verify's own split)
+if raw_state is malformed (reveal queue underflowed): return false
+if reveals is not empty after the top-level call: return false   # leftover
+                                                                    # reveals
+if levels_reached != V: return false     # some claimed level was never
+                                          # actually on t's own path
+if finalize(raw_state, N) != Delta': return false        # binding check
+if mismatch != true: return false        # a truthful non-accusation is
+                                          # not a fraud proof
+return true
+\end{lstlisting}
+\end{algorithm}
+
+\begin{theorem}[Fraud-proof soundness]
+\label{thm:fraud-soundness}
+Under Assumption~\ref{ass:freestart}, if \textsc{VerifyFraudProof} accepts
+against a genuine digest $\Delta'$, then the file $\Delta'$ commits to is
+\emph{not canonically built} -- some $\mathrm{block}(a,k)$ somewhere is a
+violation -- except by also producing a free-start collision in $\C$. It
+does \emph{not}, on its own, certify that every individual level in $V$ is
+itself a violation (Remark~\ref{rem:fraud-localization}).
+\end{theorem}
+
+\begin{proof}
+Suppose the file is canonically built -- every $\mathrm{MID}(a)$ equals
+$\mathrm{pad}_b(\CK[a])$ -- yet \textsc{VerifyFraudProof} accepts
+$(N, \Delta', t, V, d_0, d_1, \mathit{reveals}, \mathit{actual\_mid\_bytes})$.
+Compare this \emph{submitted} execution with a \emph{genuine} one for the
+same $t$ and the same $V$: the honest proof \textsc{BuildProof}$(t)$, with
+substituted strings equal to the file's actual bytes at each $(a,k) \in V$,
+which by canonicity are $\mathrm{pad}_b(\CK[a])$. The genuine execution is
+therefore an ordinary \textsc{EvalBlock} run in disguise, reaches
+$\Delta'$, and its checkpoint argument at every level $(a_k,k)$ of $t$'s
+path is $\CK[a_k]$. Both executions finalize to $\Delta'$, so
+Corollary~\ref{cor:top-extraction} gives either a free-start collision, or
+(a) $\mathit{actual\_mid\_bytes}[(a,k)] = \mathrm{pad}_b(\CK[a])$ for every
+$(a,k) \in V$ and (b) at every anchored level the submitted checkpoint
+argument equals $\CK[a_k]$. Acceptance requires a counted mismatch, i.e.\
+some \emph{anchored} $(a,k) \in V$ with $\mathit{actual\_mid\_bytes}[(a,k)]
+\ne \mathrm{pad}_b(\mathit{ckpt})$; by (a) and (b) both sides equal
+$\mathrm{pad}_b(\CK[a])$ -- a contradiction.
+\end{proof}
+
+\begin{remark}[Why the anchoring condition is necessary]
+\label{rem:fraud-anchoring}
+Counting mismatches at unanchored levels would make the theorem false.
+For $N=8$, $t=6$, $V=\{(4,2)\}$ on a canonical file, the level's
+checkpoint is the first reveal, used only by the substituted closing fold
+(the right child is seeded with a separate reveal). Replacing that reveal
+by any other value leaves the fold to $\Delta'$ unchanged but forces a
+mismatch -- an accepted accusation against a canonical file, with no
+collision. Substitution at unanchored levels is still permitted, since it
+is needed to reach $\Delta'$ when an ancestor on $t$'s path is genuinely
+corrupted; only the mismatch there is not counted.
+\end{remark}
+
+\begin{remark}[General nested/chained violations, not just one point]
+\label{rem:fraud-scope-general}
+Substituting only \emph{one} of several violations chained along a single
+path does not work, in either direction. Suppose block$(a,k)$ (deeper) and
+block$(a,k')$ (an ancestor, $k' > k$) are both violations. A fraud proof
+disputing only $(a,k)$ folds the ancestor's closing step with the
+\emph{canonical} $\mathrm{pad}_b(\CK[a])$ -- but the real file's ancestor
+$\mathrm{MID}(a)$ is genuinely corrupted, so the reconstructed path departs
+from the file's actual hash chain at that ancestor step and, absent a
+collision, will not reach $\Delta'$. Symmetric reasoning shows a fraud
+proof disputing only the ancestor $(a,k')$ fails too, since it folds the
+deeper, also-corrupted level canonically. Substituting the \emph{real}
+physical bytes at \emph{every} violated level on the path simultaneously
+avoids this: the reconstruction then matches the file's true hash chain at
+every step along the path, violated or not, so it reaches $\Delta'$
+regardless of how many violations are chained together. It might seem
+that proving only the \emph{deepest} violation on a chained path should
+always suffice, on the reasoning that nothing lies below it to be
+corrupted -- but that reasoning only accounts for corruption \emph{below}
+the disputed level, not \emph{above} it, and is false whenever an ancestor
+higher up the same path is \emph{also} corrupted, exactly as the
+paragraph above shows -- confirmed directly against real SHA-256
+(\texttt{simulate\_fraud\_proofs.py}, Cases F and G): a single-substitution
+proof at either the deepest or an ancestor violation alone fails to verify
+for a deliberately nested pair (and triple), while the multi-level
+substitution above succeeds. Violations on independent (non-nested) paths
+are unaffected by any of this and can each be proven with their own
+(possibly single-level) proof.
+\end{remark}
+
+\begin{remark}[Sibling substitution is unsound]
+\label{rem:fraud-completeness-caveat}
+A proof anchored at target $t$ can only substitute real bytes at one of
+$t$'s own containing blocks -- never at a sibling block visited along the
+way (whose prewrap is revealed but whose own closing step
+\textsc{EvalBlock} still folds in canonically, exactly as an ordinary
+proof does). One might be tempted to widen $V$ to include such sibling
+positions too, so that a violation sitting there could also be disputed.
+That does not work: the sibling's canonical closing step is the only
+place the checkpoint value threaded down from $t$'s own base data,
+$d_0$ and $d_1$, is ever used again once computed, so substituting a
+claimed value there instead severs $d_0$, $d_1$, and every reveal on
+$t$'s path from $\Delta'$ entirely -- the fold-to-digest check then
+passes regardless of what base data is handed to \textsc{VerifyFraudProof},
+letting a forger fabricate an accepting proof against a fully
+\emph{canonical} file with no collision needed at all. (This is exactly
+the kind of unsoundness a tamper-injection test catches directly: flip a
+bit of the submitted $d_0$ in an otherwise-genuine proof built this way,
+and verification is unaffected -- which is only possible if $d_0$ was
+never actually bound to $\Delta'$ in the first place.) So substitution
+must stay confined to $t$'s own containing blocks, and a violation
+sitting on some sibling's own closing step, relative to a particular $t$,
+is simply not provable via that $t$. This leaves a genuine question: does
+\emph{some} target always work, for any non-canonical file, no matter how
+its violations are scattered? Theorem~\ref{thm:fraud-completeness} below
+answers yes.
+\end{remark}
+
+\begin{lemma}[Dyadic containment]
+\label{lem:dyadic-containment}
+For any index $t$ and any block $\mathrm{block}(a,k)$ in the recursion
+with $a \le t$, exactly one of the following holds: either
+$\mathrm{block}(a,k)$ \emph{contains} $t$ (i.e.\ $a \le t < a+2^k$), or it
+lies \emph{entirely at or before} $t$ (i.e.\ $a+2^k \le t$). These are the
+only two possibilities once $a \le t$, immediately from
+$\mathrm{block}(a,k)$ being the contiguous index range $[a,a+2^k)$: either
+$t$ falls inside that range, or the range has already ended by the time
+$t$ is reached.
+\end{lemma}
+
+\begin{theorem}[Fraud-proof completeness]
+\label{thm:fraud-completeness}
+For every non-canonical FlatMerkle file $F'$ of valid size $N$, if
+$\textsc{ScanForViolations}(F')$ finds at least one violation, then
+choosing $t$ = the $a$ of the violation with the largest such value, and
+$V$ = every violation on $t$'s own containment path (i.e.\
+$V = \{(a,k) : (a,k)$ is one of $t$'s own containing blocks and a
+violation$\}$), makes $\textsc{BuildFraudProof}(F', t, V)$ produce a proof
+$\textsc{VerifyFraudProof}$ accepts.
+\end{theorem}
+
+\begin{proof}
+Let $(a',k')$ be any violation the scan found; by the choice of $t$ (the
+maximum violation start), $a' \le t$. By Lemma~\ref{lem:dyadic-containment},
+either (i) $\mathrm{block}(a',k')$ contains $t$, or (ii) it lies entirely
+at or before $t$.
+
+In case (i): since $a'$ is, by construction of the recursion, the unique
+multiple of $2^{k'}$ whose block contains $t$ at level $k'$, $(a',k')$ is
+exactly one of $t$'s own containing blocks -- i.e.\ $(a',k') \in V$ -- so
+it is substituted explicitly with its real physical bytes.
+
+In case (ii): $\mathrm{block}(a',k')$'s entire index range lies at or
+before $t$. Every index $\le t$ falls either inside $t$'s own base pair, or
+inside a sibling range $\textsc{EvalBlock}$ visits going \emph{right}
+somewhere along $t$'s own recursion path (a right branch at level $j$ has
+$t \ge c+h$ for that level's midpoint $c+h$, and its sibling is the range
+$[c, c+h)$, entirely $< c+h \le t$) -- \emph{never} inside a sibling range
+visited going \emph{left} (a left branch has $t < c+h$, and its sibling is
+$[c+h, c+2h)$, entirely $> t$, the wrong side for case (ii)). Every
+right-branch sibling's value is read as an opaque, real $\mathrm{ending}$
+straight from $F'$'s own scan trace ($\textsc{ExtractPhysicalProof}$ never
+recomputes it canonically), so it already reflects
+$\mathrm{block}(a',k')$'s real, possibly-corrupted bytes automatically --
+no substitution is needed, or possible, to fix what is already correct by
+construction.
+
+So every violation the scan found is accounted for by
+$\textsc{BuildFraudProof}(F',t,V)$: either substituted explicitly (case
+(i)) or already reflected in a genuine reveal (case (ii)) -- none can fall
+inside a sibling visited going left, the one place substitution is
+unavailable (Remark~\ref{rem:fraud-completeness-caveat}). Since
+$\textsc{ExtractPhysicalProof}(F',t)$ builds $d_0, d_1$, and every reveal
+directly from $F'$'s real physical bytes (never a canonical
+reconstruction), the fold $\textsc{VerifyFraudProof}$ performs --
+substituting real bytes at every $(a,k) \in V$ and folding in $F'$'s
+genuine reveals everywhere else -- exactly reproduces $F'$'s true physical
+hash chain end to end, which by definition reaches $F'$'s real digest
+$\Delta'$: the binding check passes. Finally, $t$ is the start of a
+genuine violation $\mathrm{block}(t,k)$, so $(t,k) \in V$, and the
+checkpoint argument the fold carries into that level is the real running
+state entering position $t$, i.e.\ $\CK[t]$, so
+$\mathit{actual\_mid\_bytes}[(t,k)] \ne \mathrm{pad}_b(\CK[t])$. This
+level is anchored: $t$ is a multiple of $2^k$, so $\mathrm{bit}_{j-1}(t) =
+0$ for every $j \le k$, and Definition~\ref{def:anchored} gives
+$\mathrm{bnd}(k)$ through the left-branch clause down to
+$\mathrm{bnd}(1)$, whatever else is in $V$. The mismatch is therefore
+counted, and \textsc{VerifyFraudProof} accepts.
+\end{proof}
+
+Combined with Theorem~\ref{thm:fraud-soundness}, this gives full
+completeness: for \emph{any} non-canonical file, an accepting $O(\log N)$
+fraud proof always exists, even though not every individual violation is
+provable via every target.
+
+\begin{remark}[Fraud-proof soundness proves non-canonicity, not exact localization]
+\label{rem:fraud-localization}
+It might seem that Theorem~\ref{thm:fraud-soundness} should establish
+something stronger: that an accepting proof certifies \emph{block$(a,k)$
+specifically}, for $(a,k) \in V$, is a violation. That stronger claim
+overreaches: Binding (Theorem~\ref{thm:binding}) pins down the
+outermost accepted (index, data) pair for an \emph{ordinary}, unmodified
+\textsc{EvalBlock} execution, but $\textsc{EvalBlock}'$ is a
+\emph{modified} evaluator with permitted deviation points at $V$ -- and
+nothing prevents an adversary from supplying self-consistent but entirely
+fabricated data and reveals below some level, engineering a spurious
+mismatch at an \emph{innocent} level while the genuine corruption (needed
+to make the fabricated path still land on the real $\Delta'$) sits
+somewhere else in the file entirely, disguised as an honestly-revealed
+value. Concretely, for $N=8$: a publisher picks an arbitrary 64-byte $m$,
+computes $\ell = \C(\C(\C(\mathrm{IV}, D[0]), D[1]), m)$, writes
+$\mathrm{pad}_b(\ell)$ as $\mathrm{block}(2,1)$'s closing $\mathrm{MID}$,
+and builds the rest of the file consistently with that choice. The only
+violation in the file is $\mathrm{block}(2,1)$, yet a fraud proof for
+$t=0$ with $V = \{(0,1)\}$ and claimed bytes $m$ is accepted (checked
+against the reference implementation): level $(0,1)$ is anchored and its
+mismatch is real with respect to the submitted fold, but the
+\emph{physical} bytes at $\mathrm{MID}(0,1)$ are canonical. The proof of
+Theorem~\ref{thm:fraud-soundness} does not apply here, because for a
+non-canonical file there is in general no genuine execution along $t$'s
+path that reaches $\Delta'$ to compare against. What that proof actually
+establishes is the disjunctive, but still fully actionable, guarantee: at
+least one level somewhere in the walk disagrees between the genuine and
+submitted executions, and since the genuine file must actually be
+non-canonical for such a submission to reach $\Delta'$ without a collision
+at all, an accepting fraud proof is sufficient grounds to reject $F'$ --
+just not, by itself, sufficient grounds to conclude the \emph{specific}
+levels named in $V$ are where the true corruption lives. Applications that
+only need ``is this file trustworthy'' (e.g.\ the Bitcoin-annex use case
+below) are unaffected by this distinction; applications that need to
+pinpoint and, say, penalize whoever introduced a specific corrupted byte
+range would need a strictly stronger construction than the one given here.
+\end{remark}
+
+\paragraph{Cost and trust model.} Finding a violation costs the watcher
+$O(N)$, one linear pass -- unavoidable, since nothing short of reading the
+whole file can distinguish a canonical build from a non-canonical one.
+Building and verifying the resulting proof costs $O(\log N)$: exactly the
+same shape as an ordinary single-element proof (Section~\ref{sec:algorithm}),
+plus one extra 64-byte value per disputed level, and at most $L-1$ levels
+can ever lie on one path, so the proof stays $O(\log N)$ even when every
+level on a path is disputed at once. This turns FlatMerkle's soundness
+story, for a file whose canonicity is not otherwise attested to, into an
+\emph{optimistic} one: a reader may treat $F'$ as canonical by default, and
+that assumption is enforceable -- not merely hoped for -- as long as at
+least one honest watcher holds the full file within some challenge window
+and is willing to publish an $O(\log N)$ fraud proof, structurally the same
+trust assumption optimistic rollups make about their own fraud-proof
+games~\citep{kalodner2018arbitrum}. We implemented and tested
+\textsc{ScanForViolations}, \textsc{BuildFraudProof}, and
+\textsc{VerifyFraudProof} against real SHA-256, including honest files with
+zero false positives, the exact forgery of Remark~\ref{rem:layout-forgery},
+single violations at every level, up to four independent simultaneous
+violations at $N=1024$ (21 compression calls to verify a fraud proof there,
+against 2046 for a full rehash), deliberately nested chains of two and
+three violations on one path -- specifically targeting
+Remark~\ref{rem:fraud-scope-general} -- (7 and 9 compression calls
+respectively, against 14 and 30 for a full rehash), and -- specifically
+targeting Theorem~\ref{thm:fraud-completeness} -- scattered violations
+including one on a sibling block's own closing step relative to an
+otherwise-natural target, confirming that target's own proof is correctly
+blocked while the max-$a$ target's proof succeeds unaffected (6 and 8
+compression calls at $N=8$ and $N=16$ respectively); every tamper variant
+of a genuine fraud proof -- a flipped base-data byte, a flipped reveal, a
+flipped disputed-level byte string, a claim disguised as non-fraudulent,
+or a bogus off-path disputed level -- was correctly rejected, including
+against the completeness-targeting proofs specifically (ruling out the
+sibling-substitution unsoundness Remark~\ref{rem:fraud-completeness-caveat}
+describes). Two further cases target the anchoring rule
+(Remark~\ref{rem:fraud-anchoring}): every disputed-level set $V$ on every
+target's path in canonical files at $N \in \{8,16,32\}$, with one or two
+reveals replaced by random values ($5{,}544$ accusations, $308$
+configurations containing an unanchored disputed level), is rejected; and
+$300$ random non-canonical files with up to five violations each, nested
+or not, at $N \in \{4,\dots,64\}$, all yield an accepting fraud proof at
+the max-$a$ target, confirming Theorem~\ref{thm:fraud-completeness} under
+the anchored rule.
+
+This is the property that makes the Bitcoin-annex application
+(Section~\ref{sec:bitcoin-annex}) deployable: not that a malicious
+publisher's non-canonical annex is harmless (Remark~\ref{rem:layout-forgery}
+shows it is not), but that binding prevents equivocation once a file is
+accepted as canonical, and the fraud-proof mechanism above gives any
+interested party a concrete, $O(\log N)$ way to challenge an annex that is
+not.

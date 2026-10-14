@@ -1,0 +1,188 @@
+\section{Application: a Bitcoin data-availability layer for an optimistic rollup}
+\label{sec:rollup-da}
+
+Section~\ref{sec:bitcoin-annex} treated the annex as a place to commit an
+arbitrary structured file. This section sketches a specific consumer of
+that mechanism: an optimistic rollup that uses a Bitcoin transaction annex
+as its data-availability (DA) layer, with FlatMerkle giving watchtowers a
+compact way to point at exactly the step they dispute. This is an
+architectural proposal, not a protocol this paper implements or
+benchmarks; the composition below is intended to be checked, not taken on
+faith, and several of its pieces are explicitly flagged as open design
+choices rather than settled specifications.
+
+\subsection{Setup: the state-transition commitment}
+\label{sec:rollup-setup}
+
+A rollup sequencer periodically batches a sequence of $m$ transactions
+$\mathit{tx}_1, \dots, \mathit{tx}_m$ applied to its ledger, starting from a
+known initial state $\mathit{state}_0$ (the previous batch's final,
+already-committed state), and producing $\mathit{state}_1, \dots,
+\mathit{state}_m$, one per transaction. The transactions themselves must be
+published \emph{in plain} as part of the committed data, not reduced to a
+hash: a data-availability layer that only commits to $H(\mathit{tx}_i)$
+without publishing $\mathit{tx}_i$ itself gives nobody the bytes they would
+need to recompute $\mathit{state}_i$ and dispute it, defeating the point of
+using an annex for DA at all. And since each step's starting state is just
+the previous step's ending state, $\mathit{state}_{i-1}$ needs no separate
+storage of its own: the sequencer publishes exactly $\mathit{state}_0$
+followed by the pairs $(\mathit{tx}_1, \mathit{state}_1), \dots,
+(\mathit{tx}_m, \mathit{state}_m)$, one initial value plus one
+transaction-and-resulting-state per step, as a single FlatMerkle structured
+file (Section~\ref{sec:construction}) inside the annex of a Bitcoin
+transaction it signs, using the block-alignment convention of
+Section~\ref{sec:annex-alignment}. Anyone who downloads the full annex can
+replay $\mathit{state}_0 \to \mathit{state}_1 \to \cdots \to \mathit{state}_m$
+directly and confirm the sequencer's claimed final state follows from its
+claimed initial state -- an ordinary $O(m)$ check that needs nothing from
+this paper. FlatMerkle's contribution is what it adds on top: an
+$O(\log N)$ way to point at, and prove the exact bytes of, one disputed
+step without redistributing the whole batch.
+
+Packing this sequence into FlatMerkle's fixed-width elements $D[a]$ needs
+an explicit framing rule, because each $\mathit{tx}_i$ has variable length
+and occupies as many consecutive elements as its encoding requires, while
+each $\mathit{state}_i$, a fixed-width digest, occupies exactly one. A
+dispute proof must show not only the bytes of some elements but that those
+elements \emph{are} $\mathit{tx}_i$ and its neighbouring states. We
+therefore let the file begin with a \emph{step table}: element $0$ holds
+$\mathit{state}_0$, and the next $\lceil m \cdot e / b \rceil$ elements
+hold, for each step $i$, the index of the first element of
+$\mathit{tx}_i$ and its length in elements, encoded in a fixed $e$-bit
+entry; $\mathit{state}_i$ is the element immediately after
+$\mathit{tx}_i$. A table whose entries overlap, leave gaps, run past $N$,
+or are not in increasing order makes the batch invalid in the same way an
+incorrect transition does, and is disputed the same way. A watchtower
+disputing step $i \ge 2$ then proves, in one batched multi-element proof
+(Section~\ref{sec:multiproof}), the table element(s) holding entries
+$i-1$ and $i$, the elements of $\mathit{tx}_i$, and the elements holding
+$\mathit{state}_{i-1}$ and $\mathit{state}_i$; for $i = 1$, the entry for
+step $1$, $\mathit{tx}_1$, $\mathit{state}_1$, and element $0$. The proof
+has size $O(\ell_i + \log N)$, where $\ell_i$ is the number of elements
+$\mathit{tx}_i$ occupies.
+
+Embedding this same commitment in an \texttt{OP\_RETURN} output instead of
+the annex raises a separate question -- how a structured file of this kind
+maps onto \texttt{OP\_RETURN}'s own size and structuring conventions --
+that this paper does not address; everything here is specific to the
+annex.
+
+\subsection{Two independent watchtower checks}
+\label{sec:rollup-checks}
+
+A set of watchtowers, each holding the full published annex, run two
+independent checks against every batch.
+
+\begin{enumerate}
+\item \textbf{Canonicity of the layout itself.} A watchtower runs
+  $\textsc{ScanForViolations}$ (Algorithm~\ref{alg:scan}, $O(N)$ where $N$
+  is the number of elements in the batch's structured file) against the
+  published annex. If the file is not canonically built, binding
+  (Theorem~\ref{thm:binding}) still holds -- each index has at most one
+  accepted value -- but that value need not be the bytes physically
+  present at the corresponding position (Remark~\ref{rem:layout-forgery}).
+  A light client following the batch through inclusion proofs and a full
+  node replaying the raw annex bytes would then see two different batches.
+  A batch that fails this check has published something that cannot be
+  relied on as a
+  faithful, unambiguous state-transition record at all, independent of
+  whether any individual transition it contains happens to be correct,
+  which this paper treats as sufficient grounds on its own for the
+  surrounding rollup protocol to slash the sequencer, hand off sequencing
+  to a new party, or force an exit to Layer 1 -- the specific choice among
+  these is a protocol-design question this paper does not resolve.
+\item \textbf{Correctness of an individual state transition.} For a
+  canonical batch, a watchtower checks each step $\mathit{state}_{i-1}
+  \to \mathit{state}_i$ against its own independent execution of the
+  rollup's deterministic state-transition function. If it finds one step
+  $i$ where the published $\mathit{state}_i$ does not match, it can isolate
+  exactly that step with a short FlatMerkle inclusion proof
+  (Section~\ref{sec:algorithm}, batched per Section~\ref{sec:multiproof} as
+  described above) against the batch's committed digest, without needing
+  any other watchtower to re-derive or re-publish the rest of the batch.
+\end{enumerate}
+
+\subsection{Enforcing the checks on Bitcoin}
+\label{sec:rollup-enforce}
+
+Both checks above are things any off-chain party can already do by
+downloading the annex; the open problem is making a \emph{failed} check
+economically consequential -- getting Bitcoin's own consensus, which
+cannot evaluate SHA-256 compression-function chaining or an arbitrary
+state-transition function directly in Script, to adjudicate the dispute
+and pay out a slashing bond. Two current, concrete mechanisms exist for
+this, and either fits here depending on how the rollup structures its own
+state-transition check: \textbf{BitVMX}, a virtual CPU that runs an
+arbitrary program (RISC-V or MIPS) and resolves a dispute by an $n$-ary
+search over a hash chain of the execution trace down to one instruction,
+adjudicated by a small, fixed piece of Script \citep{lerner2024bitvmx};
+and \textbf{BitVM3}, a newer, garbled-circuit-based protocol purpose-built
+to verify a single SNARK proof, where a challenger evaluates a garbled
+verifier circuit off-chain and, on a false claim, posts a compact,
+constant-size fraud proof on-chain \citep{linuswoll2026bitvm3}. We use
+BitVMX below since it fits an arbitrary re-execution check directly; a
+rollup that instead produces one succinct SNARK proof per batch could use
+BitVM3 for the same role at lower on-chain dispute cost.
+
+Concretely, a watchtower that found a violation of either kind opens a
+BitVMX dispute whose program takes as input the FlatMerkle inclusion proof
+for the disputed index (or, for a canonicity violation, the fraud proof
+produced by $\textsc{BuildFraudProof}$, Algorithm~\ref{alg:build-fraud}), the
+revealed step data, $\mathrm{sha\_annex}$, and enough of the Bitcoin
+transaction and its Taproot signature to reconstruct $\mathit{SigMsg}$
+(Section~\ref{sec:annex-authentication}). The disputed program itself
+checks, in order: that the inclusion (or fraud) proof folds correctly to
+the claimed $\mathrm{sha\_annex}$ under $\mathrm{finalize\_annex}$
+(Section~\ref{sec:annex-alignment}); that the supplied signature validates
+over $\mathit{SigMsg}$ for the claimed $\mathrm{sha\_annex}$; and, for a
+transition dispute, that re-applying the state-transition function to the
+revealed $\mathit{state}_{i-1}$ and $\mathit{tx}_i$ does \emph{not} yield
+the revealed $\mathit{state}_i$ (for a canonicity dispute, that
+$\textsc{VerifyFraudProof}$ accepts the supplied fraud proof). If BitVMX's
+bisection game resolves in the watchtower's favor, the pre-arranged
+slashing path pays out. Authenticating a signature against $\mathit{SigMsg}$
+this way establishes only the first of the two sub-properties identified in
+Section~\ref{sec:annex-authentication} -- that a validly signed witness
+variant with this $\mathrm{sha\_annex}$ exists, not that it is the specific
+variant Bitcoin confirmed. Chaining successive batch-commitment
+transactions (each spending an output of the previous one) does not close
+that gap: a spend references the previous transaction's \texttt{txid},
+which excludes witness data, so it does not fix which annex variant was
+mined. For the dispute, however, sub-property~1 is enough, provided the
+slashing condition covers \emph{every} witness variant the sequencer
+signs, not only the confirmed one: an invalid (non-canonical, or
+transition-violating) annex that carries a valid sequencer signature is
+slashable whether or not it was mined, so the dispute program never needs
+to learn which variant Bitcoin confirmed, and the watchtowers, who run full
+nodes, dispute the mined one. A light client that wants to learn the
+rollup's \emph{confirmed} state from a FlatMerkle proof still faces the
+trilemma of Section~\ref{sec:annex-authentication}.
+
+The linkage between an externally-signed Bitcoin transaction and a value
+consumed inside a BitVMX program is itself the subject of ESSPI
+\citep{lerner2025esspi}, which replaces a direct in-Script Schnorr
+verification -- reported there as producing a roughly 1.1~GB Script when
+attempted directly -- with a Winternitz-committed hash of the signed data,
+checked by a secondary BitVMX instance that the commitment, the signature,
+and the claimed data are mutually consistent. ESSPI's own construction is
+built around a transaction signed by a counterparty \emph{as part of} the
+linking protocol, and its authors report no formal security analysis of
+the composed protocol and flag exposure to Bitcoin's transaction-replacement
+behavior; whether it applies directly to authenticating an
+already-existing, independently signed batch-commitment transaction of the
+kind described here, or needs adaptation, is not something either ESSPI or
+this paper settles.
+
+\subsection{Scope}
+\label{sec:rollup-scope}
+
+This section is a design sketch composing three separately published,
+separately analyzed mechanisms -- FlatMerkle's inclusion and fraud proofs,
+BitVMX's dispute game, and ESSPI's signature-linkage technique -- and none
+of the composition itself has been implemented, benchmarked, or given a
+security proof here. Left unaddressed: the concrete slashing, sequencer-
+succession, and exit-mode game the surrounding rollup protocol would need;
+collateral sizing and the round/cost trade-offs BitVMX itself exposes as
+configurable \citep{lerner2024bitvmx}; the encoding of the step table's
+entries; and, as already noted, embedding a structured file of this kind in
+\texttt{OP\_RETURN} rather than the annex.

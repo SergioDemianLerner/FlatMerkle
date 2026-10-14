@@ -1,0 +1,319 @@
+\section{EVM rollup calldata-commitment costs: full derivation}
+\label{app:eth-da}
+
+This appendix gives the full, from-scratch derivation behind
+Table~\ref{tab:eth-da-costs} and Section~\ref{sec:rollup-eth-results}:
+every gas constant used, cited to its defining EIP, RSKIP, or ArbOS
+release note; the per-option computation on each of the three chains;
+and a fuller discussion of what the result does and does not establish.
+The numbers below are computed in gas units (not ETH/RBTC/USD, which
+float with market price and are not this paper's concern) against
+current protocol constants as of this writing, with every non-protocol
+approximation (implementation-dependent ``glue code'') flagged as such.
+
+\subsection{A protocol fact the naive comparison misses}
+\label{sec:rollup-eth-7623}
+
+A gas-cost comparison based only on calldata's 16 gas/byte plus each
+option's hashing cost misses a rule that binds precisely in this situation.
+EIP-7623, live on Ethereum mainnet since the Pectra upgrade (May 2025), adds
+a \emph{floor} to every transaction's gas cost \citep{eip7623}. Writing
+$B$ for calldata bytes (worst case, all non-zero) and $E$ for all other
+(``execution'') gas used -- hashing, storage writes, memory operations --
+the total charged is
+\begin{equation}
+\mathrm{gasUsed} = 21000 + \max\big(16B + E,\ 40B\big),
+\end{equation}
+using EIP-7623's own parameters (\texttt{STANDARD\_TOKEN\_COST}$=4$,
+\texttt{TOTAL\_COST\_FLOOR\_PER\_TOKEN}$=10$, and 4 ``tokens'' per non-zero
+byte, giving $16B$ and $40B$ respectively). The floor $40B$ \emph{wins}
+whenever $E < 24B$: whenever a transaction's real computation is cheap
+relative to how much calldata it carries -- exactly the profile of a
+DA-posting transaction, whose entire purpose is to carry bytes, not compute
+on them. This means that for any of options B, C, D below, the specific
+hashing algorithm's efficiency turns out not to matter once its execution
+gas is (as we verify it is, in every case) comfortably under the
+$24$-gas/calldata-byte threshold: the transaction is billed at the floor
+regardless, and what remains decisive is only how many calldata bytes had
+to be submitted in the first place. EIP-7623 is an Ethereum-mainnet
+protocol rule, not a property every EVM-compatible chain shares by virtue
+of being EVM-compatible -- Section~\ref{sec:rollup-rsk} below returns to
+this once Rootstock is on the table, since Rootstock has no analogous
+floor.
+
+\subsection{The four options on Ethereum, computed}
+\label{sec:rollup-eth-numbers}
+
+Constants used, each unchanged since its introducing EIP and (for the
+hash-related ones) not affected by any currently \emph{live} repricing --
+two proposals that would raise them, EIP-2666 and EIP-7667, remain
+Stagnant, and the draft Glamsterdam repricing set leaves compute opcodes and
+precompiles unchanged (EIP-7904, listed in \citep{eip8007}); upcoming
+changes that \emph{do} affect this comparison are discussed at the end of
+this appendix:
+\begin{itemize}
+\item KECCAK256 opcode: $30 + 6\lceil \mathrm{len}/32\rceil$ gas.
+\item SHA-256 precompile (\texttt{0x02}): $60 + 12\lceil
+  \mathrm{len}/32\rceil$ gas.
+\item BLAKE2F precompile (\texttt{0x09}): $1$ gas per round; the standard
+  BLAKE2b compression uses 12 rounds, so 12 gas per call, each call
+  processing one 128-byte message block against a 64-byte state
+  \citep{eip152}.
+\item Cold \texttt{SSTORE} of a zero storage slot to a non-zero value:
+  \texttt{SSTORE\_SET\_GAS}$=20000$ \citep{eip2200} plus
+  \texttt{COLD\_SLOAD\_COST}$=2100$ \citep{eip2929}, i.e.\ $22100$ gas per
+  new 32-byte slot -- higher than a pre-2929 estimate of $20000$ alone.
+\item A \texttt{STATICCALL} to a precompile is always ``warm'' post-Berlin,
+  costing \texttt{WARM\_STORAGE\_READ\_COST}$=100$ gas
+  \citep{eip2929} on top of the precompile's own listed price -- a cost the
+  precompile gas figures above do \emph{not} include, and which matters
+  once an option needs many separate precompile calls rather than one.
+\end{itemize}
+
+Let $P$ be the total original (unstructured) payload size in bytes, large
+enough that fixed per-transaction terms (the $21000$ base, the small
+constant terms in the hash formulas) amortize away.
+
+\textbf{A -- persistent storage.} $B=P$; $E = (P/32)\times 22100 =
+690.625P$. Since $E/B \gg 24$, the floor does not bind:
+$\mathrm{gasUsed} \approx 16P + 690.625P = 706.625P$.
+
+\textbf{B -- Keccak256 tree, discarded.} $B=P$. Using this paper's own
+``same-convention'' tree (leaf $=H(\text{32-byte chunk})$, internal
+$=H(\text{left}\Vert\text{right})$, matching Section~\ref{sec:benchmark}):
+$N=P/32$ leaves, $2N-1\approx 2N$ calls, $E \approx 36N + 42N = 78N =
+2.4375P$ (or $\approx 1.3125P$ if raw chunks are used directly as leaves,
+skipping a separate leaf hash). Either way $E/B \ll 24$: the floor binds,
+$\mathrm{gasUsed} = 40P$.
+
+\textbf{C -- FlatMerkle, built off-chain, hashed via SHA-256.} The
+structured file is $\approx 2P$ bytes ($2N{-}2\approx 2N$ items, $N=P/64$,
+64 bytes each -- the same $\approx\!2\times$ blowup already measured in
+Section~\ref{sec:benchmark}), all of it submitted as calldata: $B=2P$.
+Hashing it in one SHA-256 precompile call costs $E \approx 0.375\times 2P =
+0.75P$. Using BLAKE2F instead does not need a one-shot hash at all:
+BLAKE2F only exposes the raw, one-block-at-a-time compression function
+(unlike SHA-256's precompile, which hashes an arbitrary-length input in a
+single call), so verifying the same structured file this way needs
+$\approx 2N = P/64$ separate chained calls, each paying the $100$-gas
+warm-call surcharge the one-shot SHA-256 call above never pays even once:
+$E \approx (P/64)\times(100+12+\text{marshal}) \approx 2\text{--}3P$,
+comparable to or worse than the SHA-256 figure, not better. Either way
+$E \ll 24B = 48P$: the floor binds regardless of which precompile hashes
+the file, at $\mathrm{gasUsed} = 40\times 2P = 80P$ -- exactly double
+option B, purely because of the doubled calldata, not because of anything
+about SHA-256 versus BLAKE2F.
+
+\textbf{D -- FlatMerkle, built on-chain via BLAKE2F.} Only the original $P$
+bytes are ever submitted as calldata; the structured file exists solely in
+EVM memory. Treating BLAKE2b's block size the way
+Section~\ref{sec:optimal-real} treats real SHA-256's (block size fixed,
+every item -- data or checkpoint -- occupies one full block): $b=128$
+bytes, $N=P/128$, $2N{-}1\approx 2N = P/64$ compression calls, each 12 gas
+of pure precompile time ($E_{\text{pure}} = 0.1875P$). Accounting for the
+warm-call surcharge and rough argument-marshaling cost each of the $P/64$
+separate calls actually pays -- an engineering approximation, not a
+protocol constant -- $E \approx (P/64)\times 135 \approx 2.109P$. Either
+figure is far under the $24$-gas/byte threshold (an implementation would
+need to be roughly \emph{ten times} less efficient than this rough estimate
+before the floor stopped binding), so: $\mathrm{gasUsed} = 40P$.
+
+\subsection{Rootstock: the same options, different protocol rules}
+\label{sec:rollup-rsk}
+
+Rootstock deliberately does not track Ethereum's gas schedule change for
+change; RSKIP239 (Draft, unadopted, but authoritative on Rootstock's
+\emph{current}, pre-proposal costs, which is what we need here) says so
+directly: ``it is not our goal to match Ethereum's gas schedule. Indeed,
+the current gas schedule in Ethereum has evolved even further away from
+RSK's [schedule], post EIP-2929'' \citep{rskip239}. Concretely, as of this
+writing Rootstock has adopted EIP-2028's calldata pricing (RSKIP400: 16
+gas/non-zero byte, same as Ethereum \citep{rskip400}) and EIP-152's BLAKE2F
+precompile (RSKIP153, same gas formula, 1 gas/round \citep{rskip153}), but
+-- per RSKIP239's own ``current cost'' column, \texttt{SLOAD} still at 200
+gas -- has \emph{not} adopted EIP-2929's Berlin repricing, and we found no
+Rootstock proposal resembling EIP-7623's calldata floor at all. Two
+consequences follow, in opposite directions:
+\begin{itemize}
+\item No calldata floor means Rootstock's transaction cost is the plain,
+  unfloored sum $16B+E$ -- there is no $\max(\cdot,40B)$ waiting to
+  absorb a cheap option's hashing-cost advantage the way it does on
+  Ethereum.
+\item No EIP-2929 means no warm-call discount for precompiles either:
+  \texttt{STATICCALL} to a precompile still costs the flat, pre-Berlin
+  \texttt{CALL} rate -- confirmed directly against the reference client's
+  own gas-constants source, \texttt{CALL = 700} in \texttt{GasCost.java}
+  \citep{rskjgascost}, with no cold/warm distinction defined anywhere in
+  that file, cross-checking exactly against RSKIP239's account. This is
+  the same flat 700 that EIP-2929 itself replaced with the 100/2600 split
+  on Ethereum \citep{eip2929}. This makes \emph{repeated} precompile
+  calls, not just hashing throughput, expensive on Rootstock in a way
+  they are not on Ethereum.
+\end{itemize}
+\texttt{SSTORE} of a fresh 32-byte slot, with no cold-slot surcharge to
+add, stays at the plain \texttt{SET\_SSTORE = 20000}
+\citep{eip2200,rskjgascost} -- $625$ gas/byte, exactly the figure a
+pre-EIP-2929 estimate would give; the same source also confirms
+\texttt{SHA3 = 30}, \texttt{SHA3\_WORD = 6} and \texttt{SHA256 = 60},
+\texttt{SHA256\_WORD = 12}, identical to the Ethereum values
+Section~\ref{sec:rollup-eth-numbers} uses.
+
+Recomputing all four options against these rules ($B$, $E$, $P$ as
+before, no floor -- $\mathrm{gasUsed}=16B+E$ directly):
+
+\textbf{A.} $E=(P/32)\times 20000=625P$; total $=16P+625P=641P$.
+
+\textbf{B.} Unchanged hashing cost ($1.3$--$2.4P$, Keccak256 is a native
+opcode on both chains, needing no call at all); total $=16P +
+(1.3\text{--}2.4)P \approx 17.3\text{--}18.4P$.
+
+\textbf{C.} $B=2P$ as before. One-shot SHA-256: $E\approx 0.75P$
+(the flat per-call overhead is paid once, negligible for large $P$);
+total $\approx 32.75P$. Chained BLAKE2F: $E\approx (P/64)\times
+(700+12+\text{marshal})\approx 11.5P$; total $\approx 43.5P$ -- here,
+without a floor to absorb it, using BLAKE2F instead of SHA-256 makes this
+option \emph{more} expensive, not merely no cheaper, since Rootstock's
+flat 700-gas call cost is paid $P/64$ times instead of once.
+
+\textbf{D.} $B=P$, $E\approx (P/64)\times(700+12+\text{marshal})\approx
+11.5P$; total $\approx 27.5P$.
+
+Ranked cheapest to most expensive on Rootstock: B ($\approx\!17.3$--$18.4$)
+$<$ D ($\approx\!27.5$) $<$ C ($\approx\!32.75$--$43.5$) $\ll$ A ($641$).
+This is not the ranking we expected going in, and it is worth stating
+plainly rather than smoothing over: on Rootstock, option D does
+\emph{not} beat option B -- removing the calldata floor does let raw
+hashing efficiency matter again, but Rootstock's absence of a warm-call
+discount taxes option D's $P/64$ separate BLAKE2F calls more than it
+costs option B's zero calls (a native opcode, not a precompile) or even
+option C's single call. What Rootstock's numbers \emph{do} show is that
+D is a clear, large improvement over C (off-chain construction) and over
+A (persistent storage) on any EVM chain we have checked, and that which
+of B or D is cheapest is not a fact about FlatMerkle or about the EVM in
+general -- it is a fact about whether the specific chain discounts
+repeated precompile calls the way Ethereum has since Berlin, which a
+deployer needs to check for their actual target chain rather than assume.
+
+\subsection{Arbitrum: the missing combination}
+\label{sec:rollup-arb}
+
+Ethereum has both a calldata floor and a warm-call discount (the discount
+just never gets to matter, since the floor already dominates); Rootstock
+has neither. The remaining combination -- a warm-call discount
+\emph{without} a calldata floor -- is not hypothetical: it is Arbitrum's
+current, documented configuration. Arbitrum One and Nova run Nitro, a
+modified Geth core that tracks Ethereum's Istanbul/Berlin/London opcode
+and precompile pricing, including EIP-2929's cold/warm split (2100/100 for
+\texttt{SLOAD}, the same split applied to precompile
+\texttt{STATICCALL}s); its own documentation, however, states plainly that
+EIP-7623 was \emph{not} enabled as part of ArbOS 40 Callisto (Arbitrum's
+Pectra-alignment upgrade, activated 2025) and remains unenabled as of
+ArbOS 51 Dia (activated January 8, 2026, current as of this writing),
+``because block size variance is less of a concern on Arbitrum chains''
+\citep{arbos40,arbos51}. This is precisely the case relevant to an
+Arbitrum Orbit L3 that wants to use Arbitrum One itself (rather than
+Ethereum L1) as its settlement/DA layer -- an L2-native analogue of the
+Bitcoin rollup setting of Section~\ref{sec:rollup-da}, with Arbitrum
+playing the role of the underlying, published-to chain.
+
+Recomputing with Ethereum's own hashing/call constants (Arbitrum inherits
+them unchanged) but \emph{no} EIP-7623 floor -- $\mathrm{gasUsed}=16B+E$,
+as on Rootstock, but with $100$-gas warm precompile calls, as on Ethereum:
+
+\textbf{A.} Same as Ethereum: $706.625P$.
+
+\textbf{B.} Unchanged: $16P + (1.3\text{--}2.4)P \approx
+17.3\text{--}18.4P$.
+
+\textbf{C.} $B=2P$; one-shot SHA-256 $\approx 32.75P$; chained BLAKE2F
+$E\approx(P/64)\times(100+12+\text{marshal})\approx 2.1P$, total
+$\approx 34.1P$ -- still no cheaper than one-shot SHA-256, for the same
+reason as before (many calls, even discounted ones, against one).
+
+\textbf{D.} $B=P$, $E\approx(P/64)\times 135\approx 2.1P$ (realistic) or
+$0.1875P$ (pure precompile); total $\approx 18.1P$, or as low as
+$16.1875P$ under the optimistic estimate.
+
+Here, unlike Rootstock, option D is at least competitive with option B
+and plausibly a little cheaper ($16.2$--$18.1P$ against
+$17.3$--$18.4P$), rather than clearly worse -- though the two ranges
+overlap enough, given how approximate the ``glue code'' estimate is, that
+we would not call this a decisive win either. What removing the floor
+while \emph{keeping} the discount does establish is directional: it moves
+D from a clear loss (Rootstock) to a close contest (Arbitrum), consistent
+with the mechanism identified above -- the discount is what lets many
+cheap calls compete with zero calls at all, and only shows up once
+nothing else swamps it.
+
+\subsection{Two narrower points, and the general lesson}
+\label{sec:rollup-eth-conclusion}
+
+FlatMerkle's case here rests on two narrower points, not on beating a
+plain Merkle tree's cost on every chain. First, the SHA-256 precompile's
+one-shot, arbitrary-length interface cannot build a structured file
+incrementally with a custom starting state the way BLAKE2F's raw,
+resumable compression-function interface can (this is exactly option C's
+cost penalty above); BLAKE2F is, as far as we are aware, the only
+precompile available on any of the three chains that exposes what
+FlatMerkle's construction actually needs, so a rollup that wants the
+structured file built entirely on-chain -- with no dependence on an
+off-chain party supplying it correctly, and no fraud-proof step to check
+that they did -- has option D as close to its only route to that
+property, not merely its cheapest one. Second, a rollup that also
+publishes a redundant or backup commitment via the Bitcoin annex
+application of Sections~\ref{sec:bitcoin-annex}--\ref{sec:rollup-da} can
+reuse a single flat, linear proof format across all four venues (Bitcoin,
+Ethereum, Rootstock, Arbitrum); a Keccak Merkle tree is not that format on
+any of them, and would need its own, separate verifier per venue.
+
+More generally: whether option B or D is cheapest is not a fact about
+FlatMerkle, nor about ``the EVM'' as a single target -- it is a fact
+about two \emph{separable} protocol design choices a given chain may or
+may not have made: a calldata floor (EIP-7623-style, which erases the gap
+between B and D by making both floor-bound) and a discount for repeated
+precompile calls (EIP-2929-style, which is what lets D's many small calls
+compete with B's zero calls at all once there is no floor to erase the
+difference). Ethereum currently has the first, and the second without it
+mattering (it applies, but the floor already dominates); Rootstock has
+neither; Arbitrum has the second without the first, which is the one
+combination among the three where option D is not clearly worse than
+option B. A rollup deployer targeting a different EVM-compatible chain
+should check both properties directly rather than assume any of these
+three answers transfers.
+
+Two further things this analysis does not cover, both flagged rather than
+resolved. First, the exact per-call ``glue code'' cost: D's $\approx 135$
+gas/call on Ethereum and Arbitrum and $\approx 737$ on Rootstock are
+estimates for a reasonably careful Solidity or Yul implementation, not
+measured or protocol-fixed numbers (on Ethereum the margin to the floor
+threshold is wide enough that this does not change the conclusion).
+Second, every constant used here is a protocol \emph{parameter}, and
+several are about to move. Ethereum's next fork, Glamsterdam, was
+activated on the Sepolia testnet in October 2026 and has no mainnet date
+as of this writing; its draft repricing set \citep{eip8007} raises the
+calldata floor from $10/40$ to $64/64$ gas per byte (EIP-7976), which
+would make the floor bind whenever $E < 48B$, putting options B and D at
+$64P$ and option C at $128P$ -- the same ranking at higher absolute cost --
+and raises the cost of creating a storage slot to $97{,}920$ state gas
+(EIP-8037), making option A several times more expensive still. The
+draft's numbers are marked preliminary. Further out, EIP-7667, if ever
+adopted, would raise \texttt{BLAKE2\_GFROUND} from 1 to 10 and the
+SHA-256/Keccak costs by roughly 5--10$\times$, moving options B, C and D
+toward the floor threshold; RSKIP239, if adopted, would not touch the
+costs of Section~\ref{sec:rollup-rsk}, but shows that Rootstock's schedule
+is also a moving target. The tables are the correct computation against
+the rules in force at the time of writing, not a permanent ranking.
+
+As illustrative, non-binding capacity figures: since Fusaka (December
+2025), EIP-7825 caps every Ethereum transaction at $2^{24} =
+16{,}777{,}216$ gas \citep{eip7825}, so a single floor-bound transaction
+(options B or D) carries at most $(2^{24} - 21{,}000)/40 \approx 419{,}000$
+bytes, and filling a $\approx\!60$-million-gas block, about $1.5$ million
+bytes, takes several transactions. At Rootstock's $6.8$ million gas block
+limit \citep{rskgas}, option B's $\approx\!17.3$--$18.4$ gas/byte allows
+roughly $370$--$390$ thousand bytes. At Arbitrum's $32$ million gas
+per-transaction cap (ArbOS 51 Dia, child-chain execution gas only,
+excluding any separate parent-chain data fee) \citep{arbos51}, option D's
+$\approx\!16.2$--$18.1$ gas/byte allows roughly $1.8$--$2.0$ million bytes
+in a single transaction. All three figures ignore every other use of the
+same block's or transaction's gas.
